@@ -1,0 +1,23 @@
+[project]
+name = "herdr-shell"
+version = "0.1.0"
+description = "Omarchy shortcuts and a searchable control menu for Herdr"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [{name = "blr"}]
+requires-python = ">=3.11"
+dependencies = ["tomlkit>=0.12,<1"]
+
+[project.urls]
+Homepage = "https://github.com/baileyrosen3/omarchy-herdr"
+Issues = "https://github.com/baileyrosen3/omarchy-herdr/issues"
+
+[project.scripts]
+herdr-shell = "herdr_shell.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["herdr_shell*"]

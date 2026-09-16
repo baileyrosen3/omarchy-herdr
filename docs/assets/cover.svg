@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="460" viewBox="0 0 1440 460" role="img" aria-labelledby="title description">
+  <title id="title">Herdr × Omarchy</title>
+  <desc id="description">Your desktop shortcuts, inside your terminal. Super Space opens the menu, Super A opens an agent, and Super Right moves through panes and tabs.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#0b2230"/>
+      <stop offset="1" stop-color="#09141e"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="1438" height="458" rx="20" fill="url(#background)" stroke="#294452" stroke-width="2"/>
+  <g font-family="Inter, DejaVu Sans, Arial, sans-serif">
+    <text x="64" y="56" font-size="13" letter-spacing="3" fill="#94aab5">A COMMUNITY INTEGRATION</text>
+    <svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Herdr" width="108" height="100" viewBox="96 130 416 382" preserveAspectRatio="xMidYMid meet" x="64" y="87" style="color:#7dcfff">
+  <g fill="currentColor" transform="translate(0 512) scale(.1 -.1)" stroke="none">
+    <path d="M2794 3710 c-129 -33 -299 -135 -359 -214 -21 -28 -26 -42 -21 -63 9 -38 154 -178 199 -192 32 -11 41 -9 104 23 171 86 354 70 475 -43 150 -138 150 -379 0 -511 -107 -95 -278 -94 -386 2 l-46 40 -11 -29 c-16 -40 -14 -122 4 -164 60 -144 264 -222 452 -174 360 92 559 494 430 868 -36 103 -81 173 -175 267 -71 72 -100 93 -180 132 -52 26 -127 54 -167 62 -96 21 -230 20 -319 -4z M2183 3695 c-116 -32 -221 -108 -273 -199 -17 -28 -30 -54 -30 -58 0 -4 20 1 45 12 66 28 220 68 294 76 64 7 65 7 137 83 40 41 71 77 69 79 -2 2 -21 8 -42 13 -55 12 -140 10 -200 -6z M2212 3388 c-159 -22 -390 -122 -559 -241 -299 -210 -585 -600 -609 -828 -12 -118 40 -251 125 -318 96 -76 178 -98 426 -116 110 -8 224 -21 254 -29 125 -34 230 -115 272 -211 11 -24 24 -81 30 -127 20 -170 65 -271 166 -374 34 -35 63 -65 63 -67 0 -1 -10 -27 -22 -57 -29 -76 -37 -259 -14 -350 42 -170 158 -318 311 -397 44 -23 98 -46 120 -52 22 -6 45 -14 51 -18 5 -5 15 -48 22 -96 6 -48 14 -92 17 -97 4 -6 415 -10 1131 -10 l1124 0 0 1584 0 1585 -55 -19 c-84 -29 -143 -68 -232 -154 l-83 -78 -54 49 c-111 102 -233 151 -391 160 -113 6 -199 -10 -298 -54 l-60 -27 -26 34 c-37 51 -120 134 -127 128 -3 -4 0 -34 7 -67 17 -89 7 -268 -21 -356 -103 -328 -377 -545 -688 -545 -161 0 -273 41 -373 137 -37 35 -66 75 -85 116 -79 173 -8 407 124 407 44 0 68 -14 117 -66 74 -78 167 -82 238 -9 60 62 72 147 33 231 -42 90 -120 130 -238 122 -50 -4 -85 -14 -131 -37 -89 -45 -122 -52 -176 -40 -92 20 -262 163 -302 253 -11 25 -21 45 -22 45 -1 -1 -30 -6 -65 -11z m-256 -505 c115 -88 129 -102 132 -131 2 -18 -2 -40 -9 -49 -7 -8 -69 -55 -138 -105 -103 -73 -130 -88 -151 -83 -35 8 -51 34 -48 74 3 31 12 42 83 92 44 31 80 61 82 66 1 4 -30 31 -69 58 -39 28 -77 56 -85 63 -18 19 -16 72 4 94 32 35 63 23 199 -79z m528 -88 c23 -24 28 -52 14 -82 l-13 -28 -141 -3 c-130 -2 -142 -1 -158 17 -23 26 -24 66 -1 91 16 18 32 20 151 20 105 0 136 -3 148 -15z" />
+  </g>
+</svg>
+    <text x="191" y="149" font-size="30" fill="#607b8b">×</text>
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" height="82" viewBox="0 0 1200 1200" width="82" x="219" y="96"><path clip-rule="evenodd" d="m1200 1200h-480v-80h400v-1040h-479.996v160h-400v720h720v-720h-80v-80h159.996v880h-400v160h-640v-1200h1200zm-1120-80h480v-80h-400l.004-400h-80.004zm0-560h80.004v-400h400v-80h-480.004z" fill="#9ece6a" fill-rule="evenodd" /></svg>
+    <text x="62" y="252" font-size="62" font-weight="700" letter-spacing="-2" fill="#e6edf3">Herdr × Omarchy</text>
+    <text x="65" y="293" font-size="23" fill="#a8becb">Your desktop shortcuts. Inside your terminal.</text>
+    <g font-family="DejaVu Sans Mono, monospace" font-size="14">
+      <rect x="64" y="334" width="149" height="40" rx="8" fill="#112e3d" stroke="#2c5365"/>
+      <text x="138.5" y="359" text-anchor="middle" fill="#7dcfff">Focused keys</text>
+      <rect x="225" y="334" width="208" height="40" rx="8" fill="#112e3d" stroke="#2c5365"/>
+      <text x="329" y="359" text-anchor="middle" fill="#a8becb">Pane-first movement</text>
+      <rect x="445" y="334" width="178" height="40" rx="8" fill="#112e3d" stroke="#2c5365"/>
+      <text x="534" y="359" text-anchor="middle" fill="#a8becb">Preview + undo</text>
+    </g>
+    <rect x="832" y="76" width="544" height="312" rx="14" fill="#0d202c" stroke="#294452"/>
+    <circle cx="864" cy="109" r="4" fill="#9ece6a"/>
+    <text x="881" y="114" font-size="12" letter-spacing="2.2" fill="#9ece6a">FOCUSED IN HERDR</text>
+    <g font-family="DejaVu Sans Mono, monospace" font-size="17">
+      <rect x="856" y="140" width="496" height="54" rx="7" fill="#153341"/>
+      <text x="878" y="174" fill="#7dcfff">Super Space</text>
+      <text x="1050" y="174" fill="#e6edf3">Your control menu</text>
+      <rect x="856" y="206" width="496" height="54" rx="7" fill="#102936"/>
+      <text x="878" y="240" fill="#7dcfff">Super A</text>
+      <text x="1050" y="240" fill="#e6edf3">Agent beside you</text>
+      <rect x="856" y="272" width="496" height="54" rx="7" fill="#102936"/>
+      <text x="878" y="306" fill="#7dcfff">Super →</text>
+      <text x="1050" y="306" fill="#e6edf3">Next pane / tab</text>
+    </g>
+    <text x="859" y="359" font-size="14" fill="#94aab5">Desktop shortcuts return when focus leaves Herdr.</text>
+    <path d="M64 412H1376" stroke="#243d4a"/>
+    <text x="64" y="439" font-size="11" letter-spacing="1.7" fill="#7592a3">HERDR PLUGIN · LINUX · OMARCHY LUA BRIDGE</text>
+    <text x="1376" y="439" text-anchor="end" font-family="DejaVu Sans Mono, monospace" font-size="12" fill="#e0af68">v0.1.0 / preview</text>
+  </g>
+</svg>

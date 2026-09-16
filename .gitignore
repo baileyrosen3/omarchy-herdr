@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Local output from live development probes.
+docs/*-capture.txt
+docs/keybinding-preview.txt
+docs/*-checks.json
+.DS_Store
