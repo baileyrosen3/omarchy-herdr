@@ -109,13 +109,21 @@ end
 -- Herdr shortcuts may have no desktop binding to wrap. Seed them
 -- before defaults, forwarding the chord outside Herdr. Later desktop bindings
 -- replace these provisional fallbacks through the unbind above.
-for _, letter in ipairs({ "A", "U", "D", "L", "R", "M" }) do
-  local keys = "SUPER + " .. letter
+for _, shortcut in ipairs({
+  { "SUPER", "A" }, { "SUPER", "U" }, { "SUPER", "D" },
+  { "SUPER", "L" }, { "SUPER", "R" }, { "SUPER", "M" },
+  { "SUPER", "T" }, { "SUPER + SHIFT", "T" },
+  { "SUPER", "P" }, { "SUPER + SHIFT", "P" },
+  { "SUPER", "comma" }, { "SUPER + SHIFT", "A" },
+  { "SUPER + SHIFT", "N" }, { "SUPER + SHIFT", "F" },
+}) do
+  local mods, key = shortcut[1], shortcut[2]
+  local keys = mods .. " + " .. key
   hl.bind(keys, function()
-    hl.dispatch(hl.dsp.send_key_state({ mods = "SUPER", key = letter, state = "down" }))
+    hl.dispatch(hl.dsp.send_key_state({ mods = mods, key = key, state = "down" }))
     hl.timer(function()
-      hl.dispatch(hl.dsp.send_key_state({ mods = "SUPER", key = letter, state = "up" }))
+      hl.dispatch(hl.dsp.send_key_state({ mods = mods, key = key, state = "up" }))
     end, { timeout = 50, type = "oneshot" })
-  end, { description = "Pass Super+" .. letter .. " to application" })
+  end, { description = "Pass " .. keys:gsub("%s+", "") .. " to application" })
   seeded[canonical(keys)] = true
 end

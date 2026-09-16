@@ -124,8 +124,13 @@ bridge**. The steps above install both parts.
 | --- | --- |
 | **Super+Space** | Open the control menu |
 | **Super+K** | Open keybindings |
+| **Super+,** | Open Appearance & Settings |
+| **Super+T** | Create a tab in the current pane's directory |
+| **Super+Shift+T** | Create a workspace in the current pane's directory |
 | **Super+A** | Open the Omarchy agent picker in a new pane to the right |
 | **Super+G** | Open Lazygit in a regular pane to the right |
+| **Super+Shift+N** | Open your editor in a popup in the current pane's directory |
+| **Super+Shift+F** | Open Yazi or ranger in a popup in the current pane's directory |
 | **Super+U** | Create a pane **above** |
 | **Super+D** | Create a pane **below** |
 | **Super+L** | Create a pane to the **left** |
@@ -152,6 +157,15 @@ a confirmation with Cancel selected first.
 Tabs and workspaces wrap at the ends. A destination restores its selected pane.
 The tab fallback stays within the current workspace.
 
+| Shortcut | Jump directly |
+| --- | --- |
+| **Super+P** | Open the workspace picker |
+| **Super+Shift+P** | Open the pane picker across tabs and workspaces |
+| **Super+Shift+A** | Focus the next agent waiting for input |
+
+Waiting agents are panes Herdr reports as blocked. If none are waiting, the
+shortcut shows a notification and keeps your current pane focused.
+
 ### Arrange and resize
 
 | Shortcut | Action |
@@ -163,12 +177,15 @@ The tab fallback stays within the current workspace.
 | **Super+Minus / Equal** | Resize left / right |
 | **Super+Shift+Minus / Equal** | Resize up / down |
 
-Workspace number shortcuts select existing workspaces. Create new ones from
-the menu first.
+Workspace number shortcuts select existing workspaces. Create new ones with
+**Super+Shift+T** or from the menu first.
 
 **Desktop behavior:** Super+F, Super+W, Super+Enter, Super+V, Alt+Tab, and
 Super+Tab retain their desktop roles. The bridge preserves the actual desktop
-dispatchers for mapped shortcuts when Herdr is not focused.
+dispatchers for mapped shortcuts when Herdr is not focused, including personal
+overrides. For example, Super+T creates a Herdr tab while Herdr is focused and
+keeps its desktop floating/tiling action elsewhere. If a chord has no desktop
+binding, it passes through to the focused application outside Herdr.
 
 ## The control menu
 

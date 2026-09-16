@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Add focused shortcuts for tabs (Super+T), workspaces (Super+Shift+T),
+  workspace and pane pickers (Super+P / Super+Shift+P), settings (Super+,),
+  waiting agents (Super+Shift+A), and editor/file popups (Super+Shift+N / F).
+- Show the new shortcuts throughout the control menu and Super-key profile.
+- Register these chords even when Omarchy has no desktop binding for them,
+  preserving existing desktop actions and passing unassigned chords through
+  outside Herdr.
+
 ## 0.1.0 — Initial public preview
 
 - Focused Omarchy Super-key routing for local Herdr terminals.

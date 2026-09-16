@@ -19,8 +19,16 @@ END = "-- END HERDR SHELL DESKTOP CONTROLS"
 MAPPINGS = [
     ("SUPER + SPACE", "menu", "Herdr Shell menu"),
     ("SUPER + K", "keybindings", "Herdr keybindings"),
+    ("SUPER + comma", "settings", "Appearance & Settings"),
+    ("SUPER + T", "tab-new", "New tab"),
+    ("SUPER + SHIFT + T", "workspace-new", "New workspace"),
+    ("SUPER + P", "workspace-picker", "Workspace picker"),
+    ("SUPER + SHIFT + P", "pane-picker", "Pane picker"),
     ("SUPER + A", "agent-new", "New agent pane"),
+    ("SUPER + SHIFT + A", "agent-next-waiting", "Next waiting agent"),
     ("SUPER + G", "launch-git", "Lazygit in pane directory"),
+    ("SUPER + SHIFT + N", "launch-editor", "Editor in pane directory"),
+    ("SUPER + SHIFT + F", "launch-files", "File browser in pane directory"),
     ("SUPER + U", "pane-split-up", "New pane above"),
     ("SUPER + D", "pane-split-down", "New pane below"),
     ("SUPER + L", "pane-split-left", "New pane left"),
@@ -74,7 +82,7 @@ def installed():
 
 def pretty_key(key, prefix="ctrl+space"):
     names = {"ctrl": "Ctrl", "alt": "Alt", "shift": "Shift", "super": "Super", "return": "Enter",
-             "enter": "Enter", "space": "Space", "esc": "Esc", "minus": "−", "equal": "=", "plus": "+"}
+             "enter": "Enter", "space": "Space", "esc": "Esc", "minus": "−", "equal": "=", "plus": "+", "comma": ","}
     def chord(value):
         value = value.strip().lower()
         for code, label in [(20, "minus"), (21, "equal"), *[(n + 9, str(n % 10)) for n in range(1, 11)]]:

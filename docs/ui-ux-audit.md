@@ -138,5 +138,36 @@ create, move, or close terminals.
 4. On a missing-tool entry, Enter should explain the missing dependency.
    A long error must be readable by scrolling, without modifying configuration.
 
+### 8. Additional focused shortcuts
+
+After updating, run `./bin/herdr-shell desktop install --apply` from the plugin
+checkout to refresh the generated bridge. Close any old menu before checking
+its new shortcut hints.
+
+Start from a normal Herdr terminal pane in a recognizable directory. Close each
+picker or popup before checking the next shortcut.
+
+| Shortcut | Expected result |
+| --- | --- |
+| Super+T | A new tab in the same workspace, with a terminal in the originating directory. |
+| Super+Shift+T | A new workspace, with a terminal in the originating directory. |
+| Super+P | The workspace picker; choose another workspace and verify focus moves there. |
+| Super+Shift+P | The pane picker; choose a pane in another tab/workspace and verify focus follows it. |
+| Super+, | Appearance & Settings; Esc returns without changing configuration. |
+| Super+Shift+A | Focus an agent Herdr marks as blocked; repeated presses cycle waiting agents. With none blocked, show “No agents are waiting for input.” and keep focus. |
+| Super+Shift+N | Your `$VISUAL` / `$EDITOR` (default `nvim`) opens as a popup in the originating directory. Quit the editor to return. |
+| Super+Shift+F | Yazi, or ranger if Yazi is unavailable, opens as a popup in the originating directory. Quit the tool to return. |
+
+Then verify:
+
+1. Reopen Super+Space. Home shows Super+T for New tab, Super+P for Switch
+   workspace, and Super+, for Appearance & Settings. All/search and the
+   Super-key profile show the other shortcuts beside their actions.
+2. Focus an application outside Herdr. Check your existing desktop actions
+   still run for these chords (including personal overrides). A chord with no
+   desktop binding should reach the application instead.
+3. Toggle Omarchy controls Off and check the same desktop behavior, then turn
+   the profile back On using the native prefix menu shortcut.
+
 If something looks wrong, report the page, terminal dimensions, selected row,
 and key sequence; these identify the layout or state transition to inspect.
