@@ -36,9 +36,10 @@ ACTIONS = [
     Action("keybindings", "Edit keybindings", "Configure", description="Search, change, disable and undo shortcuts"),
     Action("settings", "Edit settings", "Configure", description="Appearance, pane behavior and notifications"),
     Action("desktop-setup", "Set up Herdr shortcuts", "Configure", description="Preview dedicated Herdr shortcuts and check desktop conflicts"),
-    Action("welcome", "Welcome / learn Herdr", "Configure", description="Choose the walkthrough, learning game, or control menu"),
-    Action("walkthrough", "Learn: guided walkthrough", "Configure", description="Learn the shortcuts and features step by step"),
-    Action("learn-game", "Learn: play Key Quest", "Launch", description="Practice shortcuts in a separate Herdr workspace"),
+    Action("welcome", "Welcome / learn Herdr", "Configure", description="Choose a walkthrough; completing one unlocks Speed Run in this welcome"),
+    Action("walkthrough", "Learn: walkthrough", "Configure", description="Read the shortcut, safe-close, menu, and settings guide"),
+    Action("learn-hands-on", "Learn: hands-on walkthrough", "Launch", description="See every shortcut and demonstrate its action in safe practice targets"),
+    Action("learn-game", "Learn: Speed Run", "Launch", description="Race the clock with real shortcuts, speed points, and accuracy streaks"),
     Action("workspace-picker", "Switch workspace", "Navigate", "workspace_picker"),
     Action("tab-picker", "Switch tab", "Navigate"),
     Action("pane-picker", "Switch pane", "Navigate"),
@@ -151,9 +152,9 @@ def execute(action_id, context, *, yes=False):
         if yes:
             plan["confirmed"] = True
         return execute_close(plan, context)
-    if action_id == "learn-game":
+    if action_id in ("learn-hands-on", "learn-game"):
         from .trainer import open_game
-        return open_game(context)
+        return open_game(context, mode="hands-on" if action_id == "learn-hands-on" else "speed")
     if action_id in ("menu", "welcome", "walkthrough", "keybindings", "settings", "desktop-setup", "workspace-picker", "tab-picker", "pane-picker", "pane-workspace-picker"):
         return open_ui(context, action_id)
     if action_id == "agent-new":
@@ -274,6 +275,6 @@ def manifest():
                   'command = ' + json.dumps(["omarchy", "agent", "--inline", "--pick"])])
     lines.extend(["", "[[panes]]", 'id = "git"', 'title = "Lazygit"', 'placement = "split"',
                   'command = ' + json.dumps(["lazygit"])])
-    lines.extend(["", "[[panes]]", 'id = "trainer"', 'title = "Herdr Key Quest"', 'placement = "split"',
+    lines.extend(["", "[[panes]]", 'id = "trainer"', 'title = "Herdr Learning"', 'placement = "split"',
                   'command = ' + json.dumps(["sh", "-c", 'exec python3 "$HERDR_PLUGIN_ROOT/bin/herdr-shell" _learn'])])
     return "\n".join(lines) + "\n"

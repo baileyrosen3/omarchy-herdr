@@ -81,17 +81,52 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.state.iterdir()), ["onboarding.json"])
 
     def test_welcome_choices_and_escape_persist_only_after_display(self):
-        for keys, expected in ((["\n"], "walkthrough"), ([curses.KEY_DOWN, "\n"], "game"),
-                               ([curses.KEY_END, "\n"], "menu"), (["\x1b"], None)):
+        for keys, expected in ((["\n"], "walkthrough"), ([curses.KEY_DOWN, "\n"], "hands-on"),
+                               ([curses.KEY_END, "\n"], "hands-on"), (["\x1b"], None)):
             with self.subTest(expected=expected):
                 (self.state / "onboarding.json").unlink(missing_ok=True)
                 instance = Menu(keys)
                 self.assertEqual(onboarding.welcome(instance), expected)
                 self.assertFalse(onboarding.needs_welcome())
                 first = "\n".join(text for _, text in instance.screen.frames[0])
-                self.assertIn("Walkthrough (read-only guide)", first)
-                self.assertIn("Learning game (separate workspace)", first)
-                self.assertIn("Open the menu", first)
+                self.assertIn("Walkthrough", first)
+                self.assertIn("Hands-on walkthrough", first)
+                self.assertNotIn("Speed Run", first)
+                self.assertNotIn("Exit welcome", first)
+
+    def test_completed_welcome_offers_all_three_and_explicit_exit(self):
+        for keys, expected in ((["\n"], "walkthrough"), ([curses.KEY_DOWN, "\n"], "hands-on"),
+                               ([curses.KEY_DOWN, curses.KEY_DOWN, "\n"], "game"),
+                               ([curses.KEY_END, "\n"], None)):
+            with self.subTest(expected=expected):
+                onboarding.mark_learning_completed()
+                instance = Menu(keys)
+                self.assertEqual(onboarding.welcome(instance), expected)
+                first = "\n".join(text for _, text in instance.screen.frames[0])
+                self.assertIn("Speed Run", first)
+                self.assertIn("Exit welcome", first)
+                self.assertTrue(onboarding.has_learning_completed())
+
+    def test_completion_and_welcome_preserve_each_others_marker_fields(self):
+        onboarding.mark_welcomed()
+        path = self.state / "onboarding.json"
+        value = json.loads(path.read_text())
+        value["other_preference"] = {"kept": True}
+        path.write_text(json.dumps(value))
+        onboarding.mark_learning_completed()
+        onboarding.mark_welcomed()
+        self.assertEqual(json.loads(path.read_text()), {"welcome_version": onboarding.WELCOME_VERSION,
+                         "learning_completed": True, "other_preference": {"kept": True}})
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertTrue(onboarding.has_learning_completed())
+
+    def test_completion_accepts_only_boolean_true(self):
+        self.state.mkdir()
+        for value in ("not JSON", "null", "[]", "{}", '{"learning_completed": 1}',
+                      '{"learning_completed": "true"}', '{"learning_completed": false}'):
+            with self.subTest(value=value):
+                (self.state / "onboarding.json").write_text(value)
+                self.assertFalse(onboarding.has_learning_completed())
 
     def test_small_welcome_ignores_enter_and_does_not_mark_on_escape(self):
         instance = Menu(["\n", curses.KEY_DOWN, "\x1b"], ((15, 45),))
@@ -102,7 +137,7 @@ class OnboardingTests(unittest.TestCase):
     def test_resize_preserves_selection_and_waits_for_a_usable_frame(self):
         instance = Menu([curses.KEY_DOWN, "\n", curses.KEY_RESIZE, "\n"],
                         ((16, 46), (15, 45), (16, 46), (16, 46)))
-        self.assertEqual(onboarding.welcome(instance), "game")
+        self.assertEqual(onboarding.welcome(instance), "hands-on")
         self.assertFalse(onboarding.needs_welcome())
 
     def test_input_or_render_failure_leaves_welcome_unmarked(self):
@@ -128,14 +163,29 @@ class OnboardingTests(unittest.TestCase):
                 self.assertIn("may appear again", instance.notice)
                 self.assertTrue(onboarding.needs_welcome())
 
-    def test_guide_reaches_game_menu_or_escape_without_writing_state(self):
+    def test_guide_completion_unlocks_all_activities_and_exit(self):
         next_pages = ["\n"] * len(onboarding.WALKTHROUGH_PAGES)
-        for ending, expected in ((["\n"], "game"), ([curses.KEY_DOWN, "\n"], "menu"), (["\x1b"], None)):
+        for ending, expected in ((["\n"], "walkthrough"), ([curses.KEY_DOWN, "\n"], "hands-on"),
+                                 ([curses.KEY_DOWN, curses.KEY_DOWN, "\n"], "game"),
+                                 ([curses.KEY_END, "\n"], None), (["\x1b"], None)):
             with self.subTest(expected=expected):
                 instance = Menu([*next_pages, *ending])
                 self.assertEqual(onboarding.walkthrough(instance), expected)
-                self.assertTrue(any("Ready to try it?" in text for frame in instance.screen.frames for _, text in frame))
-                self.assertFalse(self.state.exists())
+                self.assertTrue(any("Walkthrough complete" in text for frame in instance.screen.frames for _, text in frame))
+                self.assertTrue(onboarding.has_learning_completed())
+
+    def test_leaving_before_last_page_does_not_unlock_speed_run_welcome(self):
+        instance = Menu(["\n", "\x1b"])
+        self.assertIsNone(onboarding.walkthrough(instance))
+        self.assertFalse(onboarding.has_learning_completed())
+        self.assertFalse(self.state.exists())
+
+    def test_completed_choice_still_available_when_persistence_fails(self):
+        instance = Menu([*["\n"] * len(onboarding.WALKTHROUGH_PAGES), curses.KEY_DOWN, curses.KEY_DOWN, "\n"])
+        with patch.object(onboarding, "mark_learning_completed", side_effect=PermissionError("state read-only")):
+            self.assertEqual(onboarding.walkthrough(instance), "game")
+        self.assertIn("Cannot save learning completion", instance.notice)
+        self.assertFalse(onboarding.has_learning_completed())
 
     def test_guide_back_and_scroll_preserve_position_at_minimum_size(self):
         instance = Menu([curses.KEY_NPAGE, curses.KEY_RIGHT, curses.KEY_LEFT,
@@ -151,9 +201,9 @@ class OnboardingTests(unittest.TestCase):
         keys = []
         for _ in onboarding.WALKTHROUGH_PAGES:
             keys.extend((curses.KEY_END, curses.KEY_RIGHT))
-        keys.extend((curses.KEY_LEFT, curses.KEY_RIGHT, curses.KEY_END, "\n"))
+        keys.extend((curses.KEY_END, "\n"))
         instance = Menu(keys, ((16, 46), (32, 100), (16, 46)))
-        self.assertEqual(onboarding.walkthrough(instance), "menu")
+        self.assertIsNone(onboarding.walkthrough(instance))
         titles = {text for frame in instance.screen.frames for _, text in frame}
         for title, _ in onboarding.WALKTHROUGH_PAGES:
             self.assertIn(title, titles)

@@ -179,6 +179,14 @@ class PracticeTests(unittest.TestCase):
         plan = self.plan("pane-split-left")
         self.assertEqual(practice.Plan.from_dict(plan.to_dict()).to_dict(), plan.to_dict())
 
+    def test_speed_targets_hide_chords_while_hands_on_targets_teach_them(self):
+        for display in (False, True):
+            with self.subTest(display=display), patch.object(practice, "_banner") as banner:
+                plan = practice.prepare("pane-split-right", self.guide, display_chord=display)
+            text = "\n".join(call.args[1] for call in banner.call_args_list)
+            self.assertEqual("SUPER + ALT + R" in text, display)
+            self.assertEqual(plan.expected["learning_mode"], "hands-on" if display else "speed")
+
     def test_wrong_key_and_completed_duplicate_do_not_mutate(self):
         plan = self.plan("pane-split-right")
         self.server.calls.clear()
@@ -519,6 +527,14 @@ class PracticeTests(unittest.TestCase):
             practice.perform(plan, plan.action)
             self.assertTrue(practice.verified(plan))
             self.assertEqual(plan.history, ["opened", "closed"])
+
+    def test_speed_menu_popup_receives_mode_without_revealing_chord(self):
+        plan = practice.prepare("menu", self.guide, display_chord=False)
+        marker = {"pid": 100, "start": "1", "pane": plan.target.pane, "terminal": plan.target.terminal}
+        with patch.object(practice.desktop, "menu_running", side_effect=[None, marker]), \
+             patch.object(practice.actions, "open_ui", return_value={}) as open_ui:
+            practice.perform(plan, "menu")
+        self.assertEqual(open_ui.call_args.kwargs["env"], {"HERDR_SHELL_GAME_MENU": "1", "HERDR_SHELL_GAME_MENU_MODE": "speed"})
 
     def test_menu_replacement_preserved_instead_of_closed(self):
         plan = self.plan("menu")

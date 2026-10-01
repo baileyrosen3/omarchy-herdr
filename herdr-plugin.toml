@@ -38,13 +38,19 @@ command = ["python3", "bin/herdr-shell", "action", "run", "welcome"]
 
 [[actions]]
 id = "walkthrough"
-title = "Learn: guided walkthrough"
+title = "Learn: walkthrough"
 contexts = ["pane"]
 command = ["python3", "bin/herdr-shell", "action", "run", "walkthrough"]
 
 [[actions]]
+id = "learn-hands-on"
+title = "Learn: hands-on walkthrough"
+contexts = ["pane"]
+command = ["python3", "bin/herdr-shell", "action", "run", "learn-hands-on"]
+
+[[actions]]
 id = "learn-game"
-title = "Learn: play Key Quest"
+title = "Learn: Speed Run"
 contexts = ["pane"]
 command = ["python3", "bin/herdr-shell", "action", "run", "learn-game"]
 
@@ -360,6 +366,6 @@ command = ["lazygit"]
 
 [[panes]]
 id = "trainer"
-title = "Herdr Key Quest"
+title = "Herdr Learning"
 placement = "split"
 command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/bin/herdr-shell\" _learn"]

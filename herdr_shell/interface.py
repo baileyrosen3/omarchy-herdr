@@ -51,9 +51,10 @@ LABELS = {
 }
 DESCRIPTIONS = {
     "menu": "Super+Alt+M opens or closes the control menu. Selecting this item closes the current menu.",
-    "welcome": "Choose a guided walkthrough, play Key Quest in a separate workspace, or open the control menu.",
-    "walkthrough": "Learn the Super+Alt shortcuts, agent priority sweep, safe closing, and menu features step by step.",
-    "learn-game": "Play 26 live shortcut missions in a new Herdr practice workspace. Press real Super+Alt chords and watch the actions happen.",
+    "welcome": "Start with the walkthrough or hands-on walkthrough. Complete either to add Speed Run to this welcome; all activities are already available from the menu.",
+    "walkthrough": "Read the shortcut family, agent priority sweep, safe-close policy, menu controls, and settings guide.",
+    "learn-hands-on": "See all 26 Super+Alt chords and demonstrate real actions at your own pace in a safe practice workspace.",
+    "learn-game": "Use real shortcuts against a 120-second active clock. Faster accurate presses earn more points and streak bonuses.",
     "agent-new": "Open your default Omarchy agent in a new pane to the right, in this tab and directory.",
     "launch-git": "Open Lazygit in a regular pane to the right, using this pane's directory.",
     "launch-editor": "Open your preferred editor in a popup in this directory.",
@@ -85,7 +86,7 @@ DESCRIPTIONS = {
 
 def section_for(row):
     action = row["id"]
-    if action.startswith("launch-") or action in ("agent-new", "learn-game"):
+    if action.startswith("launch-") or action in ("agent-new", "learn-hands-on", "learn-game"):
         return "launch"
     if action in ("workspace-picker", "tab-picker"):
         return "navigate"
@@ -162,7 +163,7 @@ def activation_label(row):
     return {"setting": "Edit", "binding": "Edit" if row.get("path") else "Info",
             "desktop-binding": "Info", "desktop-toggle": "Set up" if row.get("detail") == "Set up" else "Toggle",
             "target": "Switch", "move-target": "Move"}.get(row.get("kind"),
-            "Open" if row.get("id") in ("keybindings", "settings", "desktop-setup", "welcome", "walkthrough", "learn-game") or row.get("id", "").endswith("-picker")
+            "Open" if row.get("id") in ("keybindings", "settings", "desktop-setup", "welcome", "walkthrough", "learn-hands-on", "learn-game") or row.get("id", "").endswith("-picker")
             else "Review" if row.get("confirm") or row.get("id") in ("config-undo", "theme-terminal") else "Run")
 
 
@@ -403,7 +404,7 @@ class MenuView:
         if visible and visible[-1][0] + 1 < len(rows):
             count += " ↓"
         inactive = any(not row.get("shortcut_active") or row.get("unavailable") for row in rows)
-        notice = m.notice or ("! Inactive / limited · F1 details" if inactive else "Type learn for walkthrough / game")
+        notice = m.notice or ("! Inactive / limited · F1 details" if inactive else "Type learn for walkthrough / Speed Run")
         if len(visible) < len(rows) and not m.notice and not inactive:
             notice = "PgUp/PgDn scroll · F1 details"
         self.text(h - 3, 3, notice, curses.A_DIM, w - cell_width(count) - 9)

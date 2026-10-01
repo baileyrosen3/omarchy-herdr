@@ -1,4 +1,4 @@
-"""Private, short-lived shortcut input for an active Key Quest guide.
+"""Private, short-lived shortcut input for an active learning guide.
 
 The desktop router only submits a chord. The guide's main thread remains the
 sole owner of practice actions and curses. A wrong or repeated chord cannot
@@ -19,6 +19,7 @@ import stat
 import struct
 import tempfile
 import threading
+import time
 
 from .config import atomic_write
 from .runtime import Context, ShellError
@@ -51,7 +52,7 @@ def _private_directory(path, *, create=False):
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
     info = path.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ShellError("Key Quest's input directory is not private; it was preserved.")
+        raise ShellError("Learning input's directory is not private; it was preserved.")
 
 
 def _read_marker(path):
@@ -267,6 +268,9 @@ class Broker:
         self.lock = threading.RLock()
         self.events = queue.Queue(maxsize=1)
         self.notices = queue.Queue(maxsize=16)
+        self.wrong_events = queue.Queue(maxsize=256)
+        self.wrong_count = 0
+        self.last_received_at = None
         self.action = None
         self.busy = False
         try:
@@ -283,7 +287,7 @@ class Broker:
         _private_directory(self.path.parent, create=True)
         previous = _read_marker(self.path)
         if previous and _owner(previous):
-            raise ShellError("A Key Quest guide is already open in this Herdr session; close it first.")
+            raise ShellError("A learning guide is already open in this Herdr session; close it first.")
         # A malformed or foreign file is never overwritten just to start a game.
         if (self.path.exists() or self.path.is_symlink()) and previous is None:
             raise ShellError("Cannot verify the existing practice input record; it was preserved.")
@@ -389,7 +393,7 @@ class Broker:
 
     def next_event(self):
         try:
-            action, context, desktop_identity = self.events.get_nowait()
+            action, context, desktop_identity, received_at = self.events.get_nowait()
         except queue.Empty:
             return None
         try:
@@ -406,7 +410,18 @@ class Broker:
             self._notice("Practice focus or its terminal changed; no action was run.")
             self.complete()
             return None
+        self.last_received_at = received_at
         return action, context
+
+    def metrics(self):
+        """Drain timestamped mistakes without resetting their cumulative count."""
+        with self.lock:
+            events = []
+            while True:
+                try:
+                    events.append(self.wrong_events.get_nowait())
+                except queue.Empty:
+                    return {"wrong_count": self.wrong_count, "wrong_events": events}
 
     def feedback(self):
         result = []
@@ -423,6 +438,7 @@ class Broker:
             pass
 
     def _accept(self, request):
+        received_at = time.monotonic()
         try:
             if not isinstance(request, dict) or request.get("nonce") != self.nonce:
                 return {"handled": False, "nonce": self.nonce}
@@ -434,18 +450,25 @@ class Broker:
                 if _identity(context) not in self.scope:
                     return {"handled": False, "nonce": self.nonce}
                 action = request.get("action")
+                if not isinstance(action, str) or not action or len(action) > 256:
+                    raise ValueError("invalid shortcut action")
                 if self.action is None:
                     self._notice("Start the next practice challenge before using its shortcut.")
                     state, reason = "blocked", "No challenge is armed."
-                elif action != self.action:
-                    self._notice("Try the shortcut for this challenge. F1 gives a hint.")
-                    state, reason = "wrong", "That shortcut does not match this challenge."
                 elif self.busy:
                     self._notice("Wait for this practice action to finish.")
                     state, reason = "busy", "The previous press is still being verified."
+                elif action != self.action:
+                    self._notice("Try the shortcut for this challenge. F1 gives a hint.")
+                    self.wrong_count += 1
+                    try:
+                        self.wrong_events.put_nowait({"action": action, "received_at": received_at})
+                    except queue.Full:
+                        pass
+                    state, reason = "wrong", "That shortcut does not match this challenge."
                 else:
                     self.busy = True
-                    self.events.put_nowait((action, context, desktop_identity))
+                    self.events.put_nowait((action, context, desktop_identity, received_at))
                     state, reason = "queued", ""
                 return {"handled": True, "nonce": self.nonce, "state": state, "reason": reason}
         except (ShellError, OSError, ValueError, TypeError, KeyError, queue.Full):

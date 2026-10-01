@@ -34,6 +34,8 @@ fallback keys; explicit native key edits still use the configuration editor.
 | Omarchy companion, offline setup, and cleanup | `omarchy/Service.qml`, `herdr_shell/omarchy.py`, `herdr_shell/managed.py` |
 | Super+Alt profile and desktop setup | `herdr_shell/desktop.py` |
 | Explicit Hyprland bindings and collision checks | `integrations/hyprland.lua` |
+| Hands-on walkthrough and timed Speed Run | `herdr_shell/trainer.py`, `herdr_shell/practice.py`, `herdr_shell/game_input.py` |
+| Welcome unlock state and read-only walkthrough | `herdr_shell/onboarding.py` |
 
 Keep menu actions, CLI behavior, and manifest entries consistent. After changing
 the catalog or manifest generator:
@@ -87,14 +89,22 @@ servers under `/tmp` and drives their menus. Read a live probe before running
 it; do not point it at a working session. Generated captures and results are
 local artifacts and are excluded from version control.
 
-The trainer probe completes all 26 live Key Quest missions in a temporary plugin
-copy and real Herdr/curses session. It submits shortcut events through the real
-private input broker, checks typed letters and wrong chords cannot score, and
-verifies all 34 presses, including zoom/restore, both four-agent cycles, and menu
-open/close, plus simulator cleanup on exit. Its active-profile check is a fixture;
-it neither installs a host bridge nor verifies compositor input. Practice agents
-are harmless simulations; Lazygit runs in a temporary repository when installed,
-with a labeled simulator fallback when unavailable.
+The trainer probe exercises the read-only walkthrough, ordered Hands-on, and
+shuffled Speed Run in a temporary plugin copy and real Herdr/curses session.
+Both live modes progress automatically through all 26 actions and 34 presses:
+**68 verified presses**, using 65 real private-broker events and three F4 demos.
+It checks the real menu, fresh practice workspace transition, typed-letter
+rejection, wrong-chord penalty, paused/hinted clocks, saved scoreboard accuracy,
+assisted-run personal-best exclusion, and simulator cleanup. Active-profile
+status and desktop-focus checks are explicit headless fixtures; the probe
+neither installs a host bridge nor verifies compositor input. Practice agents
+are harmless simulations; Lazygit uses a temporary repository with a labeled
+simulator fallback when unavailable.
+Unit timing checks use a controlled monotonic clock so fixture preparation and
+verification cannot count against player reaction time.
+Check that welcome initially offers only the two walkthroughs, completing either
+preserves a private unlock marker, and the completed choice shows all three plus
+Exit welcome. Menu/CLI access must remain available before that unlock.
 
 The opt-in Omarchy probe runs the packaged plugin manager and real offline Herdr
 registration under a temporary HOME/XDG tree. Local Git transport and shell IPC

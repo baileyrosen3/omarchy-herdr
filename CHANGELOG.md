@@ -24,9 +24,14 @@
 - Simplify Home into a grouped quick reference for all 26 direct shortcuts,
   with explicit Shift combinations and live availability instead of repeated
   action descriptions.
-- Offer an optional first-menu walkthrough or Herdr Key Quest learning game.
-  Practice all 26 real Super+Alt shortcuts through live missions and verified
-  Herdr results. Keep the guide outside disposable close targets, bound workspace
+- Keep the read-only Walkthrough and add a Hands-on walkthrough and timed Speed Run.
+  First welcome offers both walkthroughs; completing either persistently unlocks
+  all three activities plus Exit welcome. All remain accessible from the menu/CLI.
+  Automatically prepare and advance all 26 verified shortcut missions after one
+  start. Hands-on shows each chord and offers a clickable demonstration
+  and replay; Speed Run shuffles goals and rewards reaction speed and accurate
+  streaks against a 120-second active clock, excluding fixture/action processing.
+  Keep the guide outside disposable close targets, bound workspace
   jumps to practice fixtures, use harmless practice agents and a temporary Git
   repository, and open the real menu in a browsing-only practice view. Stop owned
   simulators and clear their agent reports on exit while preserving practice panes.

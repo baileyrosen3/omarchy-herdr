@@ -95,6 +95,26 @@ class SplitSwapTests(unittest.TestCase):
             execute("pane-split-up", FakeContext(client))
 
 
+class LearningActionTests(unittest.TestCase):
+    def test_both_learning_modes_launch_owned_practice_without_popup(self):
+        for action, mode in (("learn-hands-on", "hands-on"), ("learn-game", "speed")):
+            with self.subTest(action=action):
+                client = FakeClient()
+                context = FakeContext(client)
+                with patch("herdr_shell.trainer.open_game", return_value={"mode": mode}) as open_game:
+                    self.assertEqual(execute(action, context), {"mode": mode})
+                open_game.assert_called_once_with(context, mode=mode)
+                self.assertEqual(client.calls, [])
+
+    def test_walkthrough_remains_read_only_popup(self):
+        client = FakeClient()
+        context = FakeContext(client)
+        with patch("herdr_shell.actions.open_ui", return_value={"walkthrough": True}) as open_ui:
+            self.assertEqual(execute("walkthrough", context), {"walkthrough": True})
+        open_ui.assert_called_once_with(context, "walkthrough")
+        self.assertEqual(client.calls, [])
+
+
 class CloseTests(unittest.TestCase):
     def setUp(self):
         self.client = FakeClient()

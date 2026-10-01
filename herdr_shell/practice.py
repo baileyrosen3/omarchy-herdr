@@ -1,4 +1,4 @@
-"""Disposable fixtures and real-state checks for every Key Quest shortcut.
+"""Disposable fixtures and real-state checks for every practice shortcut.
 
 The guide/controller is never a close target. Workspace and agent navigation
 see only this plan's fixtures; no desktop bindings or global agent ring change.
@@ -398,10 +398,10 @@ def _report(context, status):
           "The simulated agent state was not recognized.")
 
 
-def prepare(action, guide):
+def prepare(action, guide, *, display_chord=True):
     """Create trusted fixtures without taking keyboard focus from the guide."""
     if action not in {a for _, a, _ in desktop.MAPPINGS}:
-        raise ShellError("This action has no Key Quest desktop lesson.")
+        raise ShellError("This action has no desktop shortcut lesson.")
     guide.validate()
     client = guide.client
     if client.snapshot().get("focused_pane_id") != guide.pane:
@@ -411,7 +411,7 @@ def prepare(action, guide):
         raise ShellError("Practice needs the game's private directory; no fixtures were created.")
     directory = tempfile.mkdtemp(prefix="practice-", dir=parent)
     key = next(k for k, a, _ in desktop.MAPPINGS if a == action)
-    banner = "KEY QUEST · disposable practice target\n" + key + "\nShortcut from the guide acts here. Your real work is outside this exercise."
+    banner = "SHORTCUT PRACTICE · disposable target\n" + (key + "\n" if display_chord else "") + "Shortcut from the guide acts here. Your real work is outside this exercise."
     contexts, spaces, tabs = [], [guide.workspace], []
 
     def tab():
@@ -436,7 +436,8 @@ def prepare(action, guide):
         return new
 
     target = workspace() if action.startswith("workspace-") else tab()
-    expected = {"fixture_tabs": tabs, "workspace_ring": spaces, "agent_ids": [], "simulators": {}}
+    expected = {"fixture_tabs": tabs, "workspace_ring": spaces, "agent_ids": [], "simulators": {},
+                "learning_mode": "hands-on" if display_chord else "speed"}
     instructions = "Practice target: " + action.replace("-", " ") + ". The shortcut from the guide acts on this disposable target."
     presses = 1
     if action.startswith("pane-swap-"):
@@ -553,7 +554,10 @@ def perform(plan, pressed_action):
         if plan.presses == 0:
             if marker:
                 raise ShellError("Another menu is open; close it before this practice lesson.")
-            result = actions.open_ui(context, "menu", env={"HERDR_SHELL_GAME_MENU": "1"})
+            env = {"HERDR_SHELL_GAME_MENU": "1"}
+            if plan.expected.get("learning_mode") == "speed":
+                env["HERDR_SHELL_GAME_MENU_MODE"] = "speed"
+            result = actions.open_ui(context, "menu", env=env)
             marker = _wait(lambda: desktop.menu_running(plan.guide.socket), "The read-only practice menu did not start.")
             if marker.get("pane") != context.pane or marker.get("terminal") != context.terminal:
                 raise ShellError("The menu opened on a different terminal; it was preserved.")

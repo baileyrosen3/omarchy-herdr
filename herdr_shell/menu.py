@@ -480,11 +480,15 @@ class Menu:
 
     def learning(self, page):
         from . import onboarding
-        choice = onboarding.welcome(self) if page == "welcome" else "walkthrough"
-        if choice == "walkthrough":
+        if page == "welcome":
+            choice = onboarding.welcome(self)
+        else:
+            choice = "walkthrough"
+        while choice == "walkthrough":
             choice = onboarding.walkthrough(self)
-        if choice == "game":
-            return {"kind": "action", "id": "learn-game", "yes": False}
+        if choice in ("hands-on", "game"):
+            action = {"hands-on": "learn-hands-on", "game": "learn-game"}[choice]
+            return {"kind": "action", "id": action, "yes": False}
         return {"kind": "dismiss"} if choice is None else None
 
     def setup_desktop(self):
@@ -576,7 +580,9 @@ class Menu:
         from . import onboarding
         practice = getattr(self, "practice", False)
         if practice:
-            self.notice = "Practice menu: browse shortcuts and help. Super+Alt+M closes it."
+            self.notice = ("Speed Run: repeat the shortcut to close this demo."
+                           if os.environ.get("HERDR_SHELL_GAME_MENU_MODE") == "speed" else
+                           "Practice menu: F4 Demo close · Super+Alt+M closes it.")
         if not practice and (self.page in ("welcome", "walkthrough") or (self.page == "menu" and onboarding.needs_welcome())):
             job = self.learning("welcome" if self.page == "menu" else self.page)
             if job:
@@ -641,7 +647,16 @@ class Menu:
                     self.notice = ""
                     self.open_page("keybindings" if key == curses.KEY_F2 else "settings")
                 elif key in (curses.KEY_F4, "\x1a"):
-                    if practice:
+                    if practice and key == curses.KEY_F4 and os.environ.get("HERDR_SHELL_GAME_MENU_MODE") != "speed":
+                        from .game_input import route
+                        result = route("menu", self.context)
+                        if result and result.get("game") == "queued":
+                            self.notice = "Closing the practice menu…"
+                        elif result and result.get("game") == "busy":
+                            self.notice = "Still verifying the open. Press F4 again when ready."
+                        else:
+                            self.notice = "Demo unavailable. Esc returns to the guide; F2 retries."
+                    elif practice:
                         self.notice = "Practice menu: configuration changes are disabled."
                     else:
                         self.undo()

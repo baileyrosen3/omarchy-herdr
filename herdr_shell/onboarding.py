@@ -1,4 +1,4 @@
-"""A first-use welcome and a read-only guide to Herdr Shell."""
+"""First-use learning choices, completion state, and a read-only walkthrough."""
 import curses
 import json
 
@@ -80,11 +80,33 @@ def needs_welcome():
         return True
 
 
-def mark_welcomed():
-    """Persist only after a welcome has been successfully displayed/dismissed."""
+def _saved_marker():
+    try:
+        value = json.loads(_marker_path().read_text())
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_marker(**changes):
     path = _marker_path()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    atomic_write(path, json.dumps({"welcome_version": WELCOME_VERSION}) + "\n", mode=0o600)
+    marker = {**_saved_marker(), **changes}
+    atomic_write(path, json.dumps(marker) + "\n", mode=0o600)
+
+
+def mark_welcomed():
+    """Persist dismissal while preserving walkthrough completion and other state."""
+    _save_marker(welcome_version=WELCOME_VERSION)
+
+
+def has_learning_completed():
+    return _saved_marker().get("learning_completed") is True
+
+
+def mark_learning_completed():
+    """Unlock the full welcome after either walkthrough actually finishes."""
+    _save_marker(learning_completed=True)
 
 
 def _finish_welcome(menu):
@@ -94,14 +116,16 @@ def _finish_welcome(menu):
         menu.notice = "Cannot save the welcome preference; it may appear again."
 
 
-def welcome(menu):
-    """Return walkthrough/game/menu, or None when the user dismisses the welcome."""
-    options = (("walkthrough", "Walkthrough (read-only guide)"),
-               ("game", "Learning game (separate workspace)"),
-               ("menu", "Open the menu"))
+def welcome(menu, *, title="Welcome to Herdr Shell", completed=None):
+    """Offer two walkthroughs first; completion adds Speed Run and explicit exit."""
+    options = [("walkthrough", "Walkthrough · read the feature guide"),
+               ("hands-on", "Hands-on walkthrough · try every key")]
+    unlocked = has_learning_completed() if completed is None else completed
+    if unlocked:
+        options += [("game", "Speed Run · timed + score"), (None, "Exit welcome")]
     selected, displayed = 0, False
     while True:
-        frame = dialogs.Frame(menu, "Welcome to Herdr Shell", height=20, width=78)
+        frame = dialogs.Frame(menu, title, height=20, width=78)
         if not frame.small:
             frame.text(5, "One family: Super+Alt + a key.", menu.accent)
             for index, (_, label) in enumerate(options):
@@ -140,31 +164,28 @@ def _wrapped(lines, width):
 
 
 def walkthrough(menu):
-    """Read-only pages; return game/menu on completion or None on dismissal."""
-    page, selected = 0, 0
+    """Read-only pages; completion unlocks the full activity choice."""
+    page = 0
     offsets = [0] * len(WALKTHROUGH_PAGES)
-    total = len(WALKTHROUGH_PAGES) + 1
+    total = len(WALKTHROUGH_PAGES)
     while True:
-        final = page == len(WALKTHROUGH_PAGES)
-        title, paragraphs = ("Ready to try it?", ()) if final else WALKTHROUGH_PAGES[page]
+        if page == total:
+            try:
+                mark_learning_completed()
+            except OSError:
+                menu.notice = "Cannot save learning completion; Speed Run remains available from the menu."
+            return welcome(menu, title="Walkthrough complete", completed=True)
+        title, paragraphs = WALKTHROUGH_PAGES[page]
         frame = dialogs.Frame(menu, title, height=32, width=94)
         if not frame.small:
-            if final:
-                frame.text(5, "Practice in a separate workspace,")
-                frame.text(6, "or explore your control menu.")
-                for index, label in enumerate(("Learning game", "Open the menu")):
-                    frame.text(8 + index, ("› " if selected == index else "  ") + label,
-                               menu.selection if selected == index else curses.A_NORMAL)
-                frame.footer("↑↓ Select  Enter Open  ← Back  Esc")
-            else:
-                lines = _wrapped(paragraphs, frame.inner)
-                visible = max(1, frame.bottom - frame.top)
-                offsets[page] = min(max(0, offsets[page]), max(0, len(lines) - visible))
-                for y, line in enumerate(lines[offsets[page]:offsets[page] + visible], frame.top):
-                    frame.text(y, line)
-                frame.footer("← Back →/Enter Next ↑↓ Scroll Esc")
+            lines = _wrapped(paragraphs, frame.inner)
+            visible = max(1, frame.bottom - frame.top)
+            offsets[page] = min(max(0, offsets[page]), max(0, len(lines) - visible))
+            for y, line in enumerate(lines[offsets[page]:offsets[page] + visible], frame.top):
+                frame.text(y, line)
+            frame.footer("← Back →/Enter Next ↑↓ Scroll Esc")
             position = f"{page + 1}/{total}"
-            if not final and len(lines) > visible:
+            if len(lines) > visible:
                 position += f" · Lines {offsets[page] + 1}–{min(len(lines), offsets[page] + visible)}/{len(lines)}"
             frame.text(frame.height - 3, position, curses.A_DIM)
         key = frame.key()
@@ -175,16 +196,7 @@ def walkthrough(menu):
         if key == curses.KEY_LEFT:
             page = max(0, page - 1)
         elif key in dialogs.ENTER or key == curses.KEY_RIGHT:
-            if final:
-                return ("game", "menu")[selected]
             page += 1
-        elif final:
-            if key in (curses.KEY_UP, curses.KEY_DOWN, "\t", curses.KEY_BTAB):
-                selected = 1 - selected
-            elif key == curses.KEY_HOME:
-                selected = 0
-            elif key == curses.KEY_END:
-                selected = 1
         elif key == curses.KEY_DOWN:
             offsets[page] += 1
         elif key == curses.KEY_UP:

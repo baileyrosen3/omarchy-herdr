@@ -88,6 +88,100 @@ class GameInputTests(GameFixture, unittest.TestCase):
             self.assertEqual(broker.feedback(), [])
             self.assertEqual(game_input.route("pane-close", self.guide)["game"], "queued")
 
+    def test_receipt_time_is_published_only_after_main_thread_validation(self):
+        with game_input.Broker(self.guide) as broker:
+            broker.arm(self.plan())
+            self.assertIsNone(broker.last_received_at)
+            with patch.object(game_input.time, "monotonic", return_value=12.5):
+                self.assertEqual(game_input.route("pane-close", self.guide)["game"], "queued")
+            self.assertIsNone(broker.last_received_at)
+            with patch.object(game_input.time, "monotonic", return_value=40.0):
+                self.assertEqual(broker.next_event(), ("pane-close", self.guide))
+            self.assertEqual(broker.last_received_at, 12.5)
+            self.assertIsNone(broker.next_event())
+            self.assertEqual(broker.last_received_at, 12.5)
+
+    def test_rejected_receipt_does_not_replace_last_valid_time(self):
+        with game_input.Broker(self.guide) as broker:
+            broker.arm(self.plan())
+            with patch.object(game_input.time, "monotonic", return_value=12.5):
+                broker._accept(self.request(broker))
+            broker.next_event()
+            broker.complete()
+            with patch.object(game_input.time, "monotonic", return_value=20.0):
+                broker._accept(self.request(broker))
+            self.focus = self.foreign.pane
+            self.assertIsNone(broker.next_event())
+            self.assertEqual(broker.last_received_at, 12.5)
+            self.assertFalse(broker.busy)
+
+    def test_wrong_metrics_are_timestamped_cumulative_and_independent_of_feedback(self):
+        with game_input.Broker(self.guide) as broker:
+            broker.arm(self.plan())
+            for at, action in ((12.5, "agent-new"), (14.0, "menu")):
+                with patch.object(game_input.time, "monotonic", return_value=at):
+                    self.assertEqual(broker._accept(self.request(broker, action=action))["state"], "wrong")
+            broker.feedback()
+            self.assertEqual(broker.metrics(), {"wrong_count": 2, "wrong_events": [
+                {"action": "agent-new", "received_at": 12.5},
+                {"action": "menu", "received_at": 14.0}]})
+            self.assertEqual(broker.metrics(), {"wrong_count": 2, "wrong_events": []})
+            broker.disarm()
+            broker.arm(self.plan("menu"))
+            with patch.object(game_input.time, "monotonic", return_value=16.0):
+                broker._accept(self.request(broker, action="agent-new"))
+            self.assertEqual(broker.metrics(), {"wrong_count": 3, "wrong_events": [
+                {"action": "agent-new", "received_at": 16.0}]})
+            self.assertIsNone(broker.last_received_at)
+
+    def test_different_chords_while_busy_do_not_count_as_wrong(self):
+        with game_input.Broker(self.guide) as broker:
+            broker.arm(self.plan())
+            self.assertEqual(game_input.route("pane-close", self.guide)["game"], "queued")
+            self.assertEqual(game_input.route("agent-new", self.guide)["game"], "busy")
+            broker.next_event()
+            self.assertEqual(game_input.route("menu", self.guide)["game"], "busy")
+            self.assertEqual(broker.metrics(), {"wrong_count": 0, "wrong_events": []})
+            broker.complete()
+            self.assertEqual(game_input.route("agent-new", self.guide)["game"], "wrong")
+            self.assertEqual(broker.metrics()["wrong_count"], 1)
+
+    def test_paused_chords_and_cleared_receipts_do_not_change_metrics(self):
+        with game_input.Broker(self.guide) as broker:
+            self.assertEqual(game_input.route("agent-new", self.guide)["game"], "blocked")
+            broker.arm(self.plan())
+            game_input.route("pane-close", self.guide)
+            broker.disarm()
+            self.assertIsNone(broker.next_event())
+            self.assertIsNone(broker.last_received_at)
+            self.assertEqual(game_input.route("agent-new", self.target)["game"], "blocked")
+            self.assertEqual(broker.metrics(), {"wrong_count": 0, "wrong_events": []})
+
+    def test_unowned_or_malformed_requests_never_add_wrong_metrics(self):
+        with game_input.Broker(self.guide) as broker:
+            broker.arm(self.plan())
+            self.assertIsNone(game_input.route("agent-new", self.foreign))
+            requests = [self.request(broker, context=self.foreign)]
+            wrong_nonce = self.request(broker, action="agent-new")
+            wrong_nonce["nonce"] = "wrong"
+            requests.append(wrong_nonce)
+            for action in (None, {}, [], "", "x" * 257):
+                requests.append(self.request(broker, action=action))
+            for request in requests:
+                broker._accept(request)
+            self.assertIsNone(broker.next_event())
+            self.assertEqual(broker.metrics(), {"wrong_count": 0, "wrong_events": []})
+
+    def test_wrong_event_storage_is_bounded_without_losing_cumulative_count(self):
+        with game_input.Broker(self.guide) as broker:
+            broker.arm(self.plan())
+            for unused in range(300):
+                broker._accept(self.request(broker, action="agent-new"))
+            metrics = broker.metrics()
+            self.assertEqual(metrics["wrong_count"], 300)
+            self.assertEqual(len(metrics["wrong_events"]), 256)
+            self.assertEqual(broker.metrics(), {"wrong_count": 300, "wrong_events": []})
+
     def test_unowned_pane_in_same_workspace_or_tab_is_outside_game(self):
         with game_input.Broker(self.guide) as broker:
             broker.arm(self.plan())

@@ -89,26 +89,39 @@ palette and retains the Herdr/Omarchy branding; minimum size is **46 × 16**.
 
 ## Learn by doing
 
-First use offers **Walkthrough**, **Learning game**, or **Open menu**; Esc skips
-onboarding. Reopen it by searching `learn`, or use:
+First welcome offers **Walkthrough** or **Hands-on walkthrough**; Esc closes it.
+Finish either walkthrough to add **Speed Run** and **Exit welcome** to that choice.
+All three activities are available immediately from the menu or CLI:
 
 ```sh
 herdr-shell learn
 herdr-shell learn walkthrough
+herdr-shell learn hands-on
 herdr-shell learn game
 ```
 
-The walkthrough is read-only. **Herdr Key Quest** has **26 live shortcut missions**.
-Enter prepares a labeled practice target; press its full **Super+Alt** chord,
-watch the action, and earn points when Herdr verifies the result. The guide stays
-safe while splits, swaps, closes, tabs, and workspace jumps use disposable targets.
-Practice agents are harmless simulations. Git practice uses a temporary repository
-with Lazygit, or a labeled simulator when Lazygit is unavailable.
-M opens the real menu in a browsing-only practice view, then M closes it.
+Choose how to learn:
 
-The game requires active shortcuts. **F1** explains, **F3** skips or replays skipped
-missions, and Esc stops unchanged simulators while keeping the practice spaces.
-Zoom practices both presses; each agent cycle visits all four priority groups.
+- **Walkthrough:** read the shortcuts, safe-close policy, menu, and settings guide.
+- **Hands-on walkthrough:** see each full chord, press it or click **Demo**,
+  and watch a real action in a practice workspace. Untimed, with replay.
+- **Speed Run:** recall shuffled shortcuts before the **120-second active clock**
+  runs out. Faster accurate presses earn more points and build a streak; hints
+  and wrong chords reduce the reward. Full unassisted runs save a local personal
+  best. Typed letters never count.
+
+Hands-on and Speed Run cover **all 26 actions**: press **Space** once to start;
+targets prepare and advance automatically. From the guide, **Space** pauses,
+**F1** explains/reveals a hint, **F2** replays/retries, **F3** skips, and **Esc** leaves.
+**F4** also demonstrates in hands-on mode. Preparation, verification, and hints
+pause the speed clock. Real keyboard practice needs active desktop shortcuts;
+hands-on Demo also works without the desktop bridge. Restarting an activity opens
+a fresh practice space. F4 also closes the hands-on practice menu.
+
+The guide stays outside disposable close targets, and workspace jumps stay in
+practice. Agents are harmless simulations; Git uses a temporary repository and
+Lazygit, with a labeled simulator fallback. M opens/closes the real menu in a
+browsing-only view. Esc stops unchanged simulators while keeping practice spaces.
 
 ## Settings and tools
 

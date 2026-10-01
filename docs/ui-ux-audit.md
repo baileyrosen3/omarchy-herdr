@@ -30,6 +30,7 @@ replacement uses dedicated Super+Alt commands and refuses occupied chords.
 | Visual | Large branding and repeated directory details consumed editing space. | Use compact headers on Home and subpages; keep logos on other main-menu sections; remove the repeated directory panel. |
 | Visual | Long lists retained double spacing even when it forced unnecessary scrolling. | Use single spacing when the entries do not fit with gaps. Add above/below indicators. |
 | Visual | Home showed only a subset of direct shortcuts and repeated long descriptions. | Show all 26 added shortcuts in a compact grouped sheet. State the shared Super+Alt modifiers once, keep Shift explicit, and leave full explanations in F1 help. |
+| High | The learning game asked for Enter before every mission, showed every answer, and awarded fixed points unrelated to speed. | Retain the read-only Walkthrough, add untimed Hands-on demonstrations and shuffled Speed Run goals; auto-prepare and advance targets, count active reaction time, and reward speed and accuracy. |
 
 The appearance adjustments are design judgments informed by the original
 screenshot. The shortcut audit is grounded in configured bindings and the live
@@ -47,8 +48,9 @@ Hyprland snapshot. The checks below cover interaction on a working desktop.
   chords are added by this profile.
 - Automated checks and isolated probes belong in the implementation validation
   report. This guide does not stand in for a live desktop interaction check.
-- The UI remains keyboard-first. This audit does not claim mouse support or
-  screen-reader verification across terminal emulators and themes.
+- The menu remains keyboard-first. The hands-on walkthrough additionally
+  offers a clickable Demo; verify terminal mouse events on the user's emulator.
+  This audit does not claim screen-reader verification across emulators and themes.
 - Historical captures predate the dedicated shortcut profile.
 
 The opt-in desktop probe (`python3 tests/desktop_probe.py`) needs `foot`, Herdr,
@@ -98,16 +100,23 @@ create, move, or close terminals.
 
 ### Optional learning
 
-1. After installation or the first menu launch, check the welcome choices:
-   Walkthrough, Learning game, and Open menu. Esc should dismiss the choice.
-   The next ordinary menu launch should not repeat it automatically.
-2. Search `learn` to reopen the welcome choice or start either activity directly.
-   The walkthrough should support Next and Back while retaining its place.
-3. Start Herdr Key Quest. Its practice workspace should be separate from the
-   originating workspace. Enter prepares a labeled disposable target while
-   keeping the guide focused and unzoomed. Use the full Super+Alt chord for each
-   of the 26 missions; typing its letter or using a wrong chord must not act or
-   earn points. Feedback must reflect the actual Herdr result.
+1. After installation or the first menu launch, check the initial welcome offers
+   Walkthrough and Hands-on walkthrough, with Esc to close. Speed Run should only
+   appear in this welcome after finishing either walkthrough, followed by Exit
+   welcome. Exit closes the panel; it must not open the menu. The next ordinary
+   menu launch should not repeat the welcome automatically.
+2. Search `learn` to reopen the welcome choice or start any activity directly.
+   All three activities must already be accessible from menu/CLI before completion.
+   `herdr-shell learn walkthrough` should retain the read-only feature guide,
+   with Back/Next and scrolling, without creating practice fixtures. Completing it
+   should save completion without overwriting the welcome preference or other state.
+3. Start the hands-on walkthrough. Its practice workspace should be separate
+   from the originating workspace. Space starts once; targets should prepare and
+   advance automatically while keeping the guide unzoomed. The full chord and
+   explanation should remain visible. Press each shortcut or click Demo to see
+   the real action (F4 also demonstrates); F2 should replay it in a fresh safe
+   target. Demo should work without active desktop bindings. There is no timer
+   or score penalty. Typing a shortcut's ordinary letter must not perform it.
 4. Practice splits, swaps, rotation, zoom/restore, pane cycles, tab/workspace
    creation, closes, and navigation. Close targets must be disposable idle shells;
    new work in a target must refuse the close. Workspace jumps must stay inside
@@ -118,12 +127,27 @@ create, move, or close terminals.
    repository, or a clearly labeled harmless simulator if Lazygit is unavailable.
    M should open the real menu in a browsing-only view and M again should close
    it. Practice menu entries must not apply settings or launch ordinary actions.
-6. F1 explains; F3 skips and replays skipped missions from the results screen.
-   Esc should expire the game input broker while retaining practice spaces.
+   Hands-on F4 should demonstrate closing that popup without the desktop bridge.
+   Esc dismissing it early should return to the guide with F2/F3 recovery.
+6. Start Speed Run. Goals should be shuffled with answers hidden until F1.
+   The 120-second clock should run only while an armed task can receive input,
+   excluding preparation, execution, verification, pause, and unusable resizing.
+   Faster accurate presses should increase score and streaks; wrong chords should
+   cause feedback and a penalty without mutating any target. Busy presses and
+   inactive shortcuts must not become accuracy errors. Click Demo must not exist
+   in this mode. Zoom/restore, both agent cycles, and menu open/close should count
+   their real required presses. Check time expiry and end-of-deck results.
+7. From the guide, Space pauses/resumes; F1 explains or reveals a hint and pauses
+   timing; F2 retries a blocked target or replays a hands-on lesson; F3 skips. The next task should not
+   require Enter. Shrink below 38 × 16 and verify clock/input suspension.
+   Esc should expire the input broker while retaining practice spaces.
    Unchanged simulators and their agent reports should disappear; unrelated or
    newly started work must remain intact.
    The originating workspace and desktop shortcuts must remain unchanged; no
    additional desktop chord should be registered.
+8. Play again or switch live activities from the completion choices. A fresh
+   guide/workspace should open; previous practice spaces should remain, their
+   unchanged simulators stopped, and the new input record owned by the new guide.
 
 ### 2. Search and returning to your place
 

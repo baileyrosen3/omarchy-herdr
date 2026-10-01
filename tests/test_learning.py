@@ -47,17 +47,26 @@ class LearningMenuTests(unittest.TestCase):
         returning.draw.assert_called_once()
         returning.load.assert_not_called()
 
-    def test_open_menu_choice_reloads_menu_in_same_popup(self):
-        first = instance(["\t", "\t", "\n", "\x03"])
+    def test_completed_exit_welcome_closes_popup_without_opening_menu(self):
+        onboarding.mark_learning_completed()
+        first = instance(["\t", "\t", "\t", "\n"])
         self.assertIsNone(first.run())
-        first.load.assert_called_once_with(preserve=False)
-        first.draw.assert_called_once()
-        self.assertEqual(first.page, "menu")
+        first.load.assert_not_called()
+        first.draw.assert_not_called()
         self.assertFalse(onboarding.needs_welcome())
 
     def test_game_choice_returns_job_after_successful_welcome(self):
-        first = instance(["\t", "\n"])
+        onboarding.mark_learning_completed()
+        first = instance(["\t", "\t", "\n"])
         self.assertEqual(first.run(), {"kind": "action", "id": "learn-game", "yes": False})
+        first.draw.assert_not_called()
+        self.assertFalse(onboarding.needs_welcome())
+
+    def test_hands_on_choice_returns_practice_job_without_read_only_pages(self):
+        first = instance(["\t", "\n"])
+        with patch.object(onboarding, "walkthrough") as walkthrough:
+            self.assertEqual(first.run(), {"kind": "action", "id": "learn-hands-on", "yes": False})
+        walkthrough.assert_not_called()
         first.draw.assert_not_called()
         self.assertFalse(onboarding.needs_welcome())
 
@@ -69,13 +78,35 @@ class LearningMenuTests(unittest.TestCase):
         welcome.assert_called_once_with(first)
 
     def test_explicit_walkthrough_does_not_replay_welcome_or_create_marker(self):
-        first = instance([*["\n"] * len(onboarding.WALKTHROUGH_PAGES), "\t", "\n", "\x03"], "walkthrough")
+        first = instance(["\x1b"], "walkthrough")
         with patch.object(onboarding, "welcome") as welcome:
             self.assertIsNone(first.run())
         welcome.assert_not_called()
-        first.load.assert_called_once_with(preserve=False)
-        first.draw.assert_called_once()
+        first.load.assert_not_called()
+        first.draw.assert_not_called()
         self.assertTrue(onboarding.needs_welcome())
+
+    def test_walkthrough_completion_unlocks_and_exits_without_opening_menu(self):
+        first = instance([*["\n"] * len(onboarding.WALKTHROUGH_PAGES), "\t", "\t", "\t", "\n"], "walkthrough")
+        with patch.object(onboarding, "mark_learning_completed", wraps=onboarding.mark_learning_completed) as mark:
+            self.assertIsNone(first.run())
+        mark.assert_called_once()
+        first.load.assert_not_called()
+        first.draw.assert_not_called()
+        self.assertTrue(onboarding.has_learning_completed())
+
+    def test_walkthrough_can_launch_either_real_practice_mode(self):
+        for choice, action in (("hands-on", "learn-hands-on"), ("game", "learn-game")):
+            with self.subTest(choice=choice):
+                first = instance([], "walkthrough")
+                with patch.object(onboarding, "walkthrough", return_value=choice):
+                    self.assertEqual(first.run(), {"kind": "action", "id": action, "yes": False})
+
+    def test_read_only_walkthrough_replays_without_recursive_job(self):
+        first = instance([], "walkthrough")
+        with patch.object(onboarding, "walkthrough", side_effect=["walkthrough", "hands-on"]) as walkthrough:
+            self.assertEqual(first.run(), {"kind": "action", "id": "learn-hands-on", "yes": False})
+        self.assertEqual(walkthrough.call_count, 2)
 
     def test_confirmation_is_never_interrupted_by_first_use_welcome(self):
         first = instance([], "confirm-pane-close")
@@ -92,11 +123,11 @@ class LearningMenuTests(unittest.TestCase):
     def test_catalog_welcome_and_walkthrough_actions_use_learning_flow(self):
         first = instance([])
         first.learning = Mock(return_value={"kind": "action", "id": "learn-game", "yes": False})
-        for action in ("welcome", "walkthrough"):
+        for action, page in (("welcome", "welcome"), ("walkthrough", "walkthrough")):
             with self.subTest(action=action):
                 result = first.activate({"id": action, "kind": "action"})
                 self.assertEqual(result["id"], "learn-game")
-                first.learning.assert_called_with(action)
+                first.learning.assert_called_with(page)
 
     def test_game_menu_skips_welcome_and_never_dispatches_a_selected_action(self):
         first = instance(["\x03"])
@@ -115,10 +146,41 @@ class LearningMenuTests(unittest.TestCase):
         first = instance([curses.KEY_F4, "\x1a", "\x03"])
         first.practice = True
         first.undo = Mock()
-        with patch.object(menu, 'MenuView') as view:
+        with patch.dict("os.environ", HERDR_SHELL_GAME_MENU_MODE="speed"), patch.object(menu, 'MenuView') as view:
             view.return_value.too_small = False
             self.assertIsNone(first.run())
         first.undo.assert_not_called()
+
+    def test_hands_on_menu_demo_close_uses_scoped_broker_without_undo(self):
+        import curses
+        first = instance([curses.KEY_F4, "\x03"])
+        first.practice = True
+        first.undo = Mock()
+        with patch.dict("os.environ", HERDR_SHELL_GAME_MENU_MODE="hands-on"), \
+             patch("herdr_shell.game_input.route", return_value={"game": "queued"}) as route, \
+             patch.object(menu, "MenuView") as view:
+            view.return_value.too_small = False
+            self.assertIsNone(first.run())
+        route.assert_called_once_with("menu", first.context)
+        first.undo.assert_not_called()
+
+    def test_speed_practice_menu_has_close_demo_instruction(self):
+        first = instance(["\x03"])
+        first.practice = True
+        with patch.dict("os.environ", HERDR_SHELL_GAME_MENU_MODE="speed"):
+            self.assertIsNone(first.run())
+        self.assertEqual(first.notice, "Speed Run: repeat the shortcut to close this demo.")
+
+    def test_busy_hands_on_menu_demo_does_not_claim_it_is_closing(self):
+        import curses
+        first = instance([curses.KEY_F4, "\x03"])
+        first.practice = True
+        with patch.dict("os.environ", HERDR_SHELL_GAME_MENU_MODE="hands-on"), \
+             patch("herdr_shell.game_input.route", return_value={"game": "busy"}), \
+             patch.object(menu, "MenuView") as view:
+            view.return_value.too_small = False
+            first.run()
+        self.assertIn("Still verifying", first.notice)
 
 
 class LearningInstallTests(unittest.TestCase):
@@ -168,6 +230,19 @@ class LearningInstallTests(unittest.TestCase):
                 cli.dispatch(args)
         check.assert_not_called()
         open_ui.assert_not_called()
+
+
+class LearningCommandTests(unittest.TestCase):
+    def test_modes_keep_walkthrough_game_and_add_hands_on_without_unlock_gate(self):
+        for mode, action in (("walkthrough", "walkthrough"), ("hands-on", "learn-hands-on"),
+                             ("game", "learn-game"), ("welcome", "welcome")):
+            with self.subTest(mode=mode):
+                args = cli.parser().parse_args(["learn", mode])
+                context = object()
+                with patch.object(cli, "resolve_context", return_value=context), \
+                     patch.object(cli, "execute", return_value={"opened": mode}) as execute:
+                    self.assertEqual(cli.dispatch(args), {"opened": mode})
+                execute.assert_called_once_with(action, context)
 
 
 if __name__ == "__main__":

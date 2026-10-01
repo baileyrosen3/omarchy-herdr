@@ -1,12 +1,14 @@
-"""Key Quest: real shortcut missions in disposable Herdr practice fixtures.
+"""Hands-on walkthrough and Speed Run in disposable Herdr fixtures.
 
-Only compositor-routed chords trigger actions. The guide verifies their result;
-ordinary letters never act as shortcut answers.
+Real shortcut receipts trigger verified actions. The untimed walkthrough also
+offers Demo through the same scoped broker; ordinary letters never act.
 """
 from dataclasses import dataclass
 import curses
+import hashlib
 import json
 import os
+import random
 from pathlib import Path
 import time
 import tempfile
@@ -79,18 +81,20 @@ def missions():
             for title, actions in ROUNDS for action in actions]
 
 
-def open_game(context):
+def open_game(context, mode='speed'):
     """Create an isolated place to play; never clean up potentially used panes."""
     from .desktop import popup_environment
+    if mode not in ('hands-on', 'speed'):
+        raise ShellError('Unknown learning mode.')
     context.validate()
     directory = Path(tempfile.mkdtemp(prefix="herdr-key-quest-"))
     (directory / "README.txt").write_text(
-        "Herdr Key Quest practice directory\n\n"
-        "These panes were created for the shortcut game. They are left in place\n"
+        "Herdr Learning practice directory\n\n"
+        "These panes were created for shortcut practice. They are left in place\n"
         "when the game exits. Close the workspace yourself when finished; Herdr\n"
         "Shell checks for running work before closing. Practice agents are harmless\n"
         "simulations. Your desktop shortcuts and configuration are unchanged.\n")
-    created = context.client.call("workspace.create", label="Herdr Key Quest", cwd=str(directory),
+    created = context.client.call("workspace.create", label="Herdr Hands-on" if mode == "hands-on" else "Herdr Speed Run", cwd=str(directory),
                                   source_workspace_id=context.workspace, focus=True)
     workspace = created["workspace"]["workspace_id"]
     try:
@@ -99,33 +103,32 @@ def open_game(context):
                                      placement="split", direction="right", target_pane_id=created["root_pane"]["pane_id"],
                                      cwd=str(directory), focus=True,
                                      env={**popup_environment(), "HERDR_SHELL_GAME_WORKSPACE": workspace,
-                                          "HERDR_SHELL_GAME_ROOT": json.dumps(root)})
+                                          "HERDR_SHELL_GAME_ROOT": json.dumps(root), "HERDR_SHELL_LEARNING_MODE": mode})
     except Exception as exc:
         # Another client could have started work in the new shell already.
         # Preserve it, rather than rolling back by closing an entire workspace.
-        raise ShellError(f"The practice workspace {workspace} remains available, but Key Quest could not open: {exc}") from exc
+        raise ShellError(f"The practice workspace {workspace} remains available, but the learning guide could not open: {exc}") from exc
     return {**result, "practice_workspace": workspace, "practice_directory": str(directory)}
 
 
 class Quest:
-    def __init__(self, screen, context, deck=None):
+    """One safe practice engine with an untimed tour and a timed recall game."""
+    def __init__(self, screen, context, deck=None, mode=None):
         self.screen, self.context = screen, context
-        self.deck = missions() if deck is None else deck
-        self.index, self.score, self.mastered = 0, 0, set()
-        self.missed, self.hinted = [], False
-        self.notice, self.help = "", False
-        self.active, self.plan = False, None
+        self.input = None
         self.practice_identities = {(context.pane, context.terminal, context.workspace, context.tab)}
         try:
             root = json.loads(os.environ.get("HERDR_SHELL_GAME_ROOT", "null"))
             self.initial_identities = [] if root is None else [root]
         except ValueError as exc:
             raise ShellError("The game's initial terminal identity is invalid.") from exc
-        self.input = None
         self.scroll, self.scroll_max, self.page_title = 0, 0, ""
         self.accent = curses.A_BOLD
+        self.demo_rows = set()
+        self.desktop_cache = (0, False)
         try:
             curses.curs_set(0)
+            curses.mousemask(curses.BUTTON1_CLICKED | curses.BUTTON1_RELEASED)
         except curses.error:
             pass
         if curses.has_colors():
@@ -135,6 +138,34 @@ class Quest:
             self.accent |= curses.color_pair(1)
         screen.keypad(True)
         screen.timeout(100)
+        self.reset(mode or os.environ.get("HERDR_SHELL_LEARNING_MODE", "speed"), deck)
+
+    def reset(self, mode, deck=None):
+        from .scoring import ActiveTimer, SpeedScore, read_results
+        if mode not in ("hands-on", "speed"):
+            raise ShellError("Unknown learning mode.")
+        self.mode = mode
+        self.deck = list(missions() if deck is None else deck)
+        if mode == "speed" and deck is None:
+            random.SystemRandom().shuffle(self.deck)
+        self.index, self.mastered, self.missed = 0, set(), []
+        self.timer, self.race = ActiveTimer(120), SpeedScore()
+        self.hinted, self.details, self.paused = False, False, False
+        self.notice, self.suspension, self.phase = "", "", "next"
+        self.active, self.plan, self.advance_pending = False, None, False
+        self.effect_until, self.response_started_at = 0, 0
+        self.failures, self.saved_result, self.wrong_seen = 0, None, 0
+        self.finished_reason = ""
+        mapping = json.dumps([(m.id, m.answer) for m in missions()], sort_keys=True)
+        self.profile = hashlib.sha256(mapping.encode()).hexdigest()
+        try:
+            self.previous = read_results(self.profile)
+        except (OSError, ValueError):
+            self.previous = {"best": None}
+
+    def usable(self):
+        h, w = self.screen.getmaxyx()
+        return h >= 16 and w >= 38
 
     def write(self, y, text, attr=0):
         h, w = self.screen.getmaxyx()
@@ -144,16 +175,30 @@ class Quest:
             except curses.error:
                 pass
 
+    def dialog_write(self, y, x, text, attr=0):
+        h, w = self.screen.getmaxyx()
+        if 0 <= y < h - 1 and 0 <= x < w - 1:
+            try:
+                self.screen.addstr(y, x, fit(clean(text), w - x - 1), attr)
+            except curses.error:
+                pass
+
     def page(self, title, lines, footer):
         self.screen.erase()
         h, w = self.screen.getmaxyx()
-        if h < 16 or w < 38:
-            self.write(1, "KEY QUEST", self.accent)
-            self.write(3, "Resize to 38 × 16 to play.")
-            self.write(5, "F3 skips. Esc leaves the game.")
+        self.demo_rows.clear()
+        if not self.usable():
+            self.write(1, "HERDR LEARNING", self.accent)
+            self.write(3, "Resize to 38 × 16. Clock paused.")
+            self.write(5, "Esc leaves. F3 skips.")
             self.screen.refresh()
             return
-        self.write(1, "HERDR × OMARCHY   KEY QUEST", self.accent)
+        self.write(1, "HERDR × OMARCHY", self.accent)
+        if self.mode == "speed":
+            left = int(self.timer.remaining() + .999)
+            self.write(2, f"{left // 60:02}:{left % 60:02} left · {self.race.points} pts · streak {self.race.streak}", self.accent)
+        else:
+            self.write(2, "Hands-on walkthrough · no timer", curses.A_DIM)
         self.write(3, title, self.accent)
         if self.page_title != title:
             self.scroll, self.page_title = 0, title
@@ -162,10 +207,20 @@ class Quest:
         self.scroll_max = max(0, len(wrapped) - visible)
         self.scroll = max(0, min(self.scroll, self.scroll_max))
         for row, part in enumerate(wrapped[self.scroll:self.scroll + visible], 5):
-            self.write(row, part)
+            self.write(row, part, self.accent if part.startswith("▶ Demo") else 0)
+            if part.startswith("▶ Demo"):
+                self.demo_rows.add(row)
         if self.scroll_max:
-            self.write(h - 4, f"↑↓ / PageUp PageDown  {self.scroll + 1}–{min(self.scroll + visible, len(wrapped))}/{len(wrapped)}", curses.A_DIM)
-        self.write(h - 3, footer, self.accent)
+            self.write(h - 4, "↑↓ / PageUp PageDown scroll", curses.A_DIM)
+        hints = [hint.strip() for hint in footer.split("  ") if hint.strip()]
+        if len(hints) > 1 and w < 78:
+            # Keep Escape discoverable even in a narrow practice terminal.
+            primary = [hint for hint in hints if hint.startswith(("Space", "F1", "Esc"))]
+            secondary = [hint for hint in hints if hint not in primary]
+            self.write(h - 3, " · ".join(primary), self.accent)
+            self.write(h - 2, " · ".join(secondary), self.accent)
+        else:
+            self.write(h - 3, footer, self.accent)
         self.screen.refresh()
 
     def key(self):
@@ -189,185 +244,483 @@ class Quest:
 
     def welcome(self):
         while True:
-            self.page("Press the shortcut. Watch the action happen.", [
-                "26 missions use the real Super+Alt chords. No letter answers.",
-                "Enter prepares a labeled practice target. Your chord acts on that target; the guide stays safe.",
-                "Watch the split, swap, zoom, close, or navigation happen. The guide returns after verifying the result.",
-                "Agents are harmless practice simulations. Lazygit uses a temporary Git repository. Workspace jumps stay in the practice area.",
-                "M opens the real menu in a browsing-only practice view; press M again to close it.",
-                "F1 explains, F3 skips, and Esc leaves. Practice spaces are kept. Shortcuts must be active in the Omarchy profile.",
-            ], "Enter Play   Esc Leave")
+            if self.mode == "hands-on":
+                title = "Try the keys. Watch their effects."
+                lines = ["26 ordered exercises show each full shortcut and explain it.",
+                         "Press the actual chord, click Demo, or use F4. The next target prepares automatically.",
+                         "F2 repeats an exercise; F3 skips. Space pauses. No timer or score."]
+            else:
+                title = "Speed Run · recall, speed, accuracy"
+                lines = ["26 shuffled missions; 120 seconds of active response time.",
+                         "Read the goal and press its real shortcut. Answers stay hidden; F1 reveals an assisted hint and pauses the clock.",
+                         "Correct: 100 base + up to 100 speed + streak bonus. Wrong chords cost 25 and break the streak.",
+                         "Setup, verification and animations cost no time. Space pauses; F3 skips. Only a full unassisted run competes for your personal best."]
+            lines += ["Agents are harmless simulations; Git uses a private temporary repository. Close targets are disposable. Your work stays outside practice.",
+                      "The menu opens for real: repeat its chord to close it. Zoom uses two presses; agent cycles use four."]
+            self.page(title, lines, "Space Start   Esc Leave")
             key = self.key()
             if self.scroll_key(key):
                 continue
             if key in ("\x1b", "\x03"):
                 return False
-            h, w = self.screen.getmaxyx()
-            if h >= 16 and w >= 38 and key in ("\n", "\r", curses.KEY_ENTER):
+            if self.usable() and key in (" ", "\n", "\r", curses.KEY_ENTER):
                 return True
 
-    def advance(self, notice=""):
-        self.input.disarm()
-        self.index += 1
-        self.hinted, self.help = False, False
-        self.active, self.plan = False, None
-        self.scroll, self.notice = 0, notice
+    def desktop_focused(self):
+        from . import desktop
+        now = time.monotonic()
+        if now < self.desktop_cache[0]:
+            return self.desktop_cache[1]
+        try:
+            window = json.loads(desktop.hypr("-j", "activewindow"))
+            clients = desktop.find_clients(window.get("pid", 0))
+            result = len(clients) == 1 and Path(desktop.socket_for(*clients[0])).resolve() == Path(self.context.socket).resolve()
+        except (ShellError, OSError, ValueError, KeyError, TypeError):
+            result = False
+        self.desktop_cache = (now + .25, bool(result))
+        return bool(result)
 
-    def award(self):
-        self.mastered.add(self.deck[self.index].id)
-        points = 6 if self.hinted else 10
-        self.score += points
-        self.advance(f"Verified! +{points} points. Enter prepares the next mission.")
-
-    def start_practice(self, mission):
-        from . import practice
-        from .desktop import effective_bindings
-        binding = effective_bindings().get(mission.id, {})
-        if not binding.get("active"):
-            raise ShellError("Shortcut unavailable: " + binding.get("reason", "Cannot verify the desktop bridge.") +
-                             " Enable the profile or use F3 to skip. The walkthrough remains available without the bridge.")
-        self.context.validate()
-        if self.context.client.snapshot().get("focused_pane_id") != self.context.pane:
-            raise ShellError("Return to the Key Quest guide before preparing a mission.")
-        self.plan = practice.prepare(mission.id, self.context)
-        plan = self.plan
-        plan.on_adopt = lambda: self.input.update(plan)
-        self.remember_practice()
-        self.input.arm(self.plan)
-        self.active = True
-        self.notice = "Ready. Press Super+Alt+" + mission.answer + " — ordinary letters do not count."
+    def visible_context(self):
+        if not self.usable():
+            return False, "Resize to 38 × 16; the clock is paused."
+        if self.mode == "speed" and not self.desktop_focused():
+            return False, "Focus this Herdr window; the clock is paused."
+        snapshot = self.context.client.snapshot()
+        pane = next((p for p in snapshot["panes"] if p["pane_id"] == snapshot.get("focused_pane_id")), None)
+        if pane and (pane["pane_id"], pane["terminal_id"], pane["workspace_id"], pane["tab_id"]) == (
+                self.context.pane, self.context.terminal, self.context.workspace, self.context.tab):
+            return True, ""
+        if self.plan and self.plan.action == "menu" and self.plan.presses == 1 and pane and (
+                pane["pane_id"], pane["terminal_id"], pane["workspace_id"], pane["tab_id"]) == (
+                self.plan.target.pane, self.plan.target.terminal, self.plan.target.workspace, self.plan.target.tab):
+            from .desktop import menu_running
+            if menu_running(self.context.socket) == self.plan.expected.get("menu_marker"):
+                return True, ""
+        return False, "Return to the guide; the clock is paused."
 
     def remember_practice(self):
-        if not hasattr(self, "practice_identities"):
-            self.practice_identities = {(self.context.pane, self.context.terminal, self.context.workspace, self.context.tab)}
         if self.plan:
             self.practice_identities.update((p["pane_id"], p["terminal_id"], p["workspace_id"], p["tab_id"])
                                             for p in self.plan.pane_identities)
 
     def return_guide(self):
         self.context.validate()
+        self.remember_practice()
         snapshot = self.context.client.snapshot()
         current = next((p for p in snapshot["panes"] if p["pane_id"] == snapshot.get("focused_pane_id")), None)
-        self.remember_practice()
         if current and tuple(current.get(k) for k in ("pane_id", "terminal_id", "workspace_id", "tab_id")) in self.practice_identities:
             self.context.client.call("workspace.focus", workspace_id=self.context.workspace)
             self.context.client.call("pane.focus", pane_id=self.context.pane)
 
-    def poll_practice(self):
+    def start_practice(self, mission):
         from . import practice
-        notices = self.input.feedback()
-        if notices:
-            self.notice = notices[-1]
+        from .desktop import effective_bindings
+        binding = effective_bindings().get(mission.id, {})
+        if self.mode == "speed" and not binding.get("active"):
+            raise ShellError("Shortcut unavailable: " + binding.get("reason", "Cannot verify the desktop bridge.") + " F2 retries; F3 skips without a timeout penalty.")
+        self.context.validate()
+        if self.context.client.snapshot().get("focused_pane_id") != self.context.pane:
+            raise ShellError("Return to the learning guide before preparing a target.")
+        self.plan = practice.prepare(mission.id, self.context, display_chord=self.mode == "hands-on")
+        plan = self.plan
+        plan.on_adopt = lambda: self.input.update(plan)
+        self.remember_practice()
+        self.active, self.phase = True, "ready"
+        if self.mode == "hands-on" and not binding.get("active"):
+            self.notice = "Desktop chord unavailable. Click Demo or press F4 to see the action."
+        self.draw(mission)
+        self.wrong_seen = self.input.metrics()["wrong_count"]
+        self.input.feedback()  # Old feedback belongs to the previous target.
+        self.input.arm(plan)
+        self.response_started_at = time.monotonic()
+        if self.mode == "speed":
+            self.timer.arm(self.response_started_at)
+            if self.hinted:
+                self.timer.suspend(self.response_started_at)
+
+    def prepare_next(self):
+        if self.paused:
+            return
+        visible, reason = self.visible_context()
+        if not visible:
+            self.suspension = reason
+            return
+        self.suspension = ""
+        mission = self.deck[self.index]
+        self.phase = "preparing"
+        self.page(f"{self.index + 1}/{len(self.deck)} missions · preparing", [mission.prompt, "Setting up a disposable target…"], "Esc Leave")
+        try:
+            self.start_practice(mission)
+        except (ShellError, OSError, KeyError, ValueError) as exc:
+            self.failures += 1
+            self.phase, self.active, self.notice = "blocked", False, str(exc)
+            self.input.disarm()
+
+    def sync_visibility(self):
+        if self.phase != "ready":
+            return
+        if not self.paused and self.plan.action == "menu" and self.plan.presses == 1:
+            from .desktop import menu_running
+            if menu_running(self.context.socket) is None:
+                # Esc can dismiss the real popup outside the guide. Recover
+                # only from our exact owned fixture, never unrelated work.
+                snapshot = self.context.client.snapshot()
+                current = next((p for p in snapshot["panes"] if p["pane_id"] == snapshot.get("focused_pane_id")), None)
+                target = self.plan.target
+                if current and tuple(current.get(k) for k in ("pane_id", "terminal_id", "workspace_id", "tab_id")) == (
+                        target.pane, target.terminal, target.workspace, target.tab):
+                    self.input.disarm()
+                    if self.mode == "speed":
+                        self.timer.cancel_response(refund=True)
+                    self.failures += 1
+                    self.phase, self.active = "blocked", False
+                    self.notice = "Practice menu closed early. F2 prepares a fresh target; F3 skips."
+                    try:
+                        self.return_guide()
+                    except (ShellError, OSError, KeyError, ValueError):
+                        self.notice += " Return to the guide."
+                    return
+        visible, reason = (False, "Paused.") if self.paused else self.visible_context()
+        suspended = self.paused or not visible
+        if suspended and not self.suspension:
+            self.input.disarm()
+            # Disarming takes the broker lock before draining mistakes, so
+            # receipts accepted just before the pause keep their fair penalty.
+            self.feedback_metrics()
+            if self.mode == "speed":
+                self.timer.suspend()
+        if suspended:
+            self.suspension = "Paused. Space resumes." if self.paused else reason
+        elif self.suspension:
+            self.wrong_seen = self.input.metrics()["wrong_count"]
+            self.input.feedback()
+            self.input.arm(self.plan)
+            self.response_started_at = time.monotonic()
+            if self.mode == "speed" and not self.hinted:
+                self.timer.resume(self.response_started_at)
+            self.suspension = ""
+
+    def feedback_metrics(self):
+        metrics = self.input.metrics()
+        count = metrics["wrong_count"]
+        delta = max(0, count - self.wrong_seen)
+        self.wrong_seen = count
+        if self.mode == "speed" and self.phase == "ready" and not self.suspension and self.timer.armed:
+            events = metrics["wrong_events"]
+            eligible = sum(not self.timer.expired(max(e["received_at"], self.response_started_at)) for e in events)
+            # The queue is bounded; every extra eligible press still counts.
+            if delta > len(events) and not self.timer.expired():
+                eligible += delta - len(events)
+            for _ in range(min(delta, eligible)):
+                deduction = self.race.mistake()
+                self.notice = f"Wrong chord · −{deduction} points · streak reset. F1 reveals the answer."
+        elif self.mode == "hands-on":
+            feedback = self.input.feedback()
+            if feedback:
+                self.notice = feedback[-1]
+        if self.mode == "speed":
+            self.input.feedback()
+
+    def poll_practice(self):
+        self.feedback_metrics()
         event = self.input.next_event()
         if event is None:
             return
         action, incoming = event
+        received = max(self.input.last_received_at or time.monotonic(), self.response_started_at)
+        if self.mode == "speed" and self.timer.expired(received):
+            self.end_run("TIME UP")
+            self.input.complete()
+            return
+        duration = self.timer.response(received) if self.mode == "speed" else 0
+        self.perform_step(action, duration)
+
+    def perform_step(self, action, duration=0):
+        from . import practice
         try:
             practice.perform(self.plan, action)
             self.remember_practice()
             self.input.update(self.plan)
-            # A routed chord and the matching actual state change are required.
-            first = practice.verified(self.plan)
-            if first:
-                time.sleep(.15)
-            second = first and practice.verified(self.plan)
-            if not second:
-                raise ShellError("The shortcut ran, but its expected practice result could not be verified. Enter retries this mission.")
-            # Give the action time to remain visible before returning to the guide.
-            if self.plan.action != "menu" or self.plan.presses >= self.plan.required_presses:
-                time.sleep(.8)
-                self.return_guide()
-            if self.plan.presses >= self.plan.required_presses:
-                self.award()
+            valid = practice.verified(self.plan)
+            if valid:
+                time.sleep(.08)
+                valid = practice.verified(self.plan)
+            if not valid:
+                raise ShellError("The action result could not be verified. F2 retries with a new target; no points were awarded.")
+            points = self.race.award(duration, hinted=self.hinted) if self.mode == "speed" else 0
+            if self.mode == "speed":
+                # A later setup failure must never refund a verified response.
+                self.timer.cancel_response()
+            self.notice = (f"Verified · +{points} points · {duration:.2f}s" if self.mode == "speed" else "Verified! Watch the effect; the next exercise starts automatically.")
+            self.advance_pending = self.plan.presses >= self.plan.required_presses
+            if self.advance_pending:
+                self.mastered.add(self.deck[self.index].id)
+            if self.plan.action == "menu" and not self.advance_pending:
+                # The actual menu stays visible until the second chord.
+                self.response_started_at = time.monotonic()
+                if self.mode == "speed":
+                    self.timer.arm(self.response_started_at)
+                    if self.hinted:
+                        self.timer.suspend(self.response_started_at)
             else:
-                self.notice = f"Verified {self.plan.presses}/{self.plan.required_presses}. Press the same chord again."
+                self.input.disarm()
+                self.phase = "effect"
+                self.effect_until = time.monotonic() + (.35 if self.mode == "speed" else 1.1)
         except (ShellError, OSError, KeyError, ValueError) as exc:
-            self.notice = str(exc)
+            self.failures += 1
+            if self.mode == "speed":
+                self.timer.cancel_response(refund=True)
+            self.notice, self.phase, self.active = str(exc), "blocked", False
+            self.input.disarm()
             try:
                 self.return_guide()
-            except (ShellError, OSError, KeyError, ValueError) as focus_error:
-                self.notice += f" Guide could not regain focus: {focus_error}"
-            self.active = False
-            self.input.disarm()
+            except (ShellError, OSError, KeyError, ValueError):
+                pass
         finally:
             self.input.complete()
 
-    def draw(self, mission):
-        lines = [f"{self.index + 1}/{len(self.deck)} missions · {len(self.mastered)} cleared · {self.score} points", "",
-                 mission.prompt, "", "Press Super+Alt+" + mission.answer,
-                 "Shortcut acts on the labeled practice target."]
-        if self.active:
-            lines.append(f"Waiting for chord · {self.plan.presses}/{self.plan.required_presses} verified presses")
-            if self.plan.instructions:
-                lines += ["", self.plan.instructions]
+    def finish_effect(self):
+        if self.phase != "effect" or time.monotonic() < self.effect_until:
+            return
+        try:
+            self.return_guide()
+        except (ShellError, OSError, KeyError, ValueError) as exc:
+            self.failures += 1
+            self.phase, self.active, self.notice = "blocked", False, "Could not return to the guide: " + str(exc)
+            self.input.disarm()
+            return
+        if self.advance_pending:
+            self.advance()
         else:
-            lines.append("Enter prepares this mission.")
-        if self.help:
-            lines += ["", mission.hint]
+            self.phase = "ready"
+            self.draw(self.deck[self.index])
+            self.input.arm(self.plan)
+            self.response_started_at = time.monotonic()
+            if self.mode == "speed":
+                self.timer.arm(self.response_started_at)
+                if self.hinted:
+                    self.timer.suspend(self.response_started_at)
+
+    def advance(self, *, skipped=False):
+        self.input.disarm()
+        if self.mode == "speed":
+            self.timer.cancel_response()
+        if skipped:
+            self.missed.append(self.deck[self.index])
+            self.race.streak = 0
+            self.notice = "Skipped. The next available mission prepares automatically."
+        self.index += 1
+        self.hinted, self.details = False, False
+        self.active, self.plan, self.phase = False, None, "next"
+        self.scroll, self.suspension = 0, ""
+
+    def close_owned_menu(self):
+        if self.plan and self.plan.action == "menu" and self.plan.presses == 1:
+            from .desktop import menu_running
+            if menu_running(self.context.socket) == self.plan.expected.get("menu_marker"):
+                self.context.client.call("popup.close")
+
+    def end_run(self, reason):
+        self.input.disarm()
+        self.timer.suspend()
+        self.finished_reason = reason
+        try:
+            self.close_owned_menu()
+            self.return_guide()
+        except (ShellError, OSError, KeyError, ValueError) as exc:
+            self.notice = "The run has stopped. Return to the guide to view results: " + str(exc)
+        self.phase, self.active = "finished", False
+
+    def demo(self):
+        if self.mode != "hands-on" or self.phase != "ready" or self.suspension:
+            return
+        from .game_input import route
+        result = route(self.plan.action, self.context)
+        if result is None or result.get("game") not in ("queued", "busy"):
+            self.notice = "Demo is not ready. Return to the guide or use F2 to retry."
+        elif result.get("game") == "busy":
+            self.notice = "Wait for the current action to finish, then try Demo again."
+
+    def draw(self, mission):
+        lines = [mission.prompt, ""]
+        if self.mode == "hands-on":
+            lines += ["▶ Demo  Super+Alt+" + mission.answer, mission.hint]
+        elif self.hinted:
+            lines += ["Assisted hint · Super+Alt+" + mission.answer, mission.hint, "Clock paused for this assisted response."]
+        else:
+            lines.append("Recall the full Super+Alt shortcut. F1 reveals it.")
+        if self.plan:
+            lines.append(f"{self.plan.presses}/{self.plan.required_presses} verified presses")
+            if self.mode == "hands-on":
+                lines += ["", self.plan.instructions]
+        if self.details:
+            lines += ["", "Close drills use fresh idle shells. Normal closes confirm running work. Native Ctrl+Alt+arrows focus panes; Shift resizes. Settings and themes remain in the control menu."]
+        if self.suspension or self.paused:
+            lines += ["", self.suspension or "Paused. Space resumes."]
+        elif self.phase == "ready":
+            lines.append("Ready · press your chord.")
+        elif self.phase == "blocked":
+            lines.append("Target unavailable · F2 Retry · F3 Skip")
         if self.notice:
             lines += ["", self.notice]
-        self.page(mission.round, lines, "Enter Prepare   F1 Explain   F3 Skip   Esc Leave")
+        footer = "Space Pause  F1 Help  F2 Replay  F3 Skip  F4 Demo  Esc" if self.mode == "hands-on" else "Space Pause  F1 Hint  F2 Retry  F3 Skip  Esc"
+        self.page(f"{self.index + 1}/{len(self.deck)} missions · {mission.round}", lines, footer)
+
+    def save_score(self):
+        from .scoring import save_result
+        if self.saved_result is not None:
+            return
+        completed = len(self.mastered) == len(missions()) and not self.missed
+        eligible = completed and self.failures == 0 and self.race.hinted_correct == 0
+        try:
+            self.saved_result = save_result(self.profile, self.race.summary(), self.timer.elapsed(), eligible=eligible, completed=completed)
+        except (OSError, ValueError) as exc:
+            self.saved_result = {"best": self.previous.get("best")}
+            self.notice = "Could not save this local score: " + str(exc)
+
+    def activity_choices(self):
+        from . import onboarding, practice
+        self.input.disarm()
+        self.timer.suspend()
+        self.close_owned_menu()
+        self.return_guide()
+        practice.cleanup(self.context)
+        completed = self.mode == "hands-on" and self.index >= len(self.deck)
+        if completed:
+            try:
+                onboarding.mark_learning_completed()
+            except OSError:
+                self.notice = "Walkthrough finished; could not save this device's welcome preference."
+        facade = SimpleNamespace(screen=self.screen, write=self.dialog_write, accent=self.accent,
+                                 selection=self.accent | curses.A_REVERSE, error=self.accent, notice="")
+        self.context.client.call("pane.zoom", pane_id=self.context.pane, mode="on")
+        self.screen.timeout(-1)
+        try:
+            choice = onboarding.welcome(facade, title="Hands-on complete" if completed else "Welcome to Herdr Shell",
+                                        completed=True if completed else None)
+            while choice == "walkthrough":
+                choice = onboarding.walkthrough(facade)
+            return "hands-on" if choice == "hands-on" else "speed" if choice == "game" else None
+        finally:
+            self.screen.timeout(100)
+            self.context.client.call("pane.zoom", pane_id=self.context.pane, mode="off")
 
     def finish(self):
+        if self.mode == "hands-on":
+            return self.activity_choices()
+        self.save_score()
         while True:
-            total = len(self.deck) * 10
-            stars = 3 if self.score >= total * .85 else 2 if self.score >= total * .55 else 1
-            self.page("QUEST COMPLETE   " + "★" * stars, [
-                f"{self.score}/{total} points. {len(self.mastered)}/{len(self.deck)} missions verified.",
-                "You performed the shortcuts and changed real Herdr practice panes, tabs, and workspaces.",
-                "Practice spaces remain available. Leave the game to restore normal shortcut actions.",
-                f"{len(self.missed)} skipped missions can be replayed.",
-            ], "F3 Replay skipped   Enter / Esc Finish")
+            summary = self.race.summary()
+            best = (self.saved_result or {}).get("best")
+            lines = [f"{summary['points']} points · {len(self.mastered)}/{len(self.deck)} missions verified",
+                     f"Accuracy {summary['accuracy']:.0f}% · correct {summary['correct']} · wrong {summary['wrong']}",
+                     f"Best streak {summary['best_streak']} · active response time {self.timer.elapsed():.1f}s",
+                     "Average response " + (f"{summary['average_time']:.2f}s" if summary['average_time'] is not None else "—"),
+                     f"Skipped {len(self.missed)} · assisted presses {summary['hinted_correct']}",
+                     "Personal best " + (str(best['points']) if best else "— finish all 26 without hints or skips to set one."),
+                     "Practice spaces remain. Demo agents stop when you leave."]
+            if self.notice:
+                lines += ["", self.notice]
+            self.page(self.finished_reason or "SPEED RUN COMPLETE", lines, "F2 Play again   Space Learning choices   Esc Exit")
             key = self.key()
             if self.scroll_key(key):
                 continue
             if key in ("\x1b", "\x03", "\n", "\r", curses.KEY_ENTER):
-                return False
-            if key == curses.KEY_F3 and self.missed:
-                self.deck, self.missed = self.missed, []
-                self.index, self.score, self.mastered = 0, 0, set()
-                self.notice = "A fresh round for the missions you skipped."
-                return True
+                return None
+            if self.usable() and key == curses.KEY_F2:
+                from . import practice
+                practice.cleanup(self.context)
+                return "speed"
+            if self.usable() and key == " ":
+                return self.activity_choices()
+
+    def handle_key(self, key):
+        if key in ("\x1b", "\x03"):
+            return False
+        if key is None or key == curses.KEY_RESIZE or self.scroll_key(key):
+            return True
+        if key == " ":
+            self.paused = not self.paused
+            if self.phase == "ready":
+                self.sync_visibility()
+        elif key == curses.KEY_F1:
+            self.details = not self.details
+            if self.mode == "speed" and self.phase == "ready":
+                self.hinted = True
+                self.timer.suspend()
+        elif key == curses.KEY_F2 and (self.mode == "hands-on" or self.phase == "blocked"):
+            self.input.disarm()
+            if self.mode == "speed":
+                self.timer.cancel_response()
+            self.active, self.plan, self.phase = False, None, "next"
+            self.hinted, self.details, self.suspension = False, False, ""
+            self.advance_pending = False
+            self.notice = "Preparing a fresh target for this exercise."
+        elif key == curses.KEY_F3:
+            self.close_owned_menu()
+            self.return_guide()
+            self.advance(skipped=True)
+        elif key == curses.KEY_F4:
+            self.demo()
+        elif key == curses.KEY_MOUSE and self.mode == "hands-on":
+            try:
+                _, x, y, _, state = curses.getmouse()
+                if 2 <= x < self.screen.getmaxyx()[1] - 2 and y in self.demo_rows and state & (curses.BUTTON1_CLICKED | curses.BUTTON1_RELEASED):
+                    self.demo()
+            except curses.error:
+                pass
+        elif isinstance(key, str) and key.isprintable():
+            self.notice = "Use the actual shortcut. Typing its letter does not perform the mission."
+        return True
 
     def run(self):
         from .game_input import Broker
-        with Broker(self.context, owned_identities=getattr(self, "initial_identities", ())) as self.input:
-            for row in getattr(self, "initial_identities", ()):
+        with Broker(self.context, owned_identities=self.initial_identities) as self.input:
+            for row in self.initial_identities:
                 self.practice_identities.add(tuple(row[k] for k in ("pane_id", "terminal_id", "workspace_id", "tab_id")))
             if not self.welcome():
                 return
             while True:
-                if self.index >= len(self.deck):
-                    if self.finish():
-                        continue
+                if self.index >= len(self.deck) or self.phase == "finished":
+                    self.input.disarm()
+                    self.timer.suspend()
+                    choice = self.finish()
+                    if choice is None:
+                        return
+                    # A replay gets a fresh guide and finite ownership record.
+                    # Preserve old practice panes rather than closing them or
+                    # growing a broker's historical scope without a bound.
+                    self.input.close()
+                    open_game(self.context, mode=choice)
                     return
-                mission = self.deck[self.index]
-                if self.active:
+                if self.phase == "ready" and not self.suspension:
+                    # Consume receipt timestamps before committing any later
+                    # resize/focus/pause observation or checking the deadline.
                     self.poll_practice()
-                    if self.index >= len(self.deck) or self.deck[self.index] is not mission:
+                if self.phase == "effect":
+                    self.finish_effect()
+                if self.index >= len(self.deck):
+                    continue
+                if self.phase == "next":
+                    self.prepare_next()
+                self.sync_visibility()
+                if self.mode == "speed" and self.phase == "ready" and not self.suspension and self.timer.expired():
+                    self.poll_practice()
+                    if self.phase == "ready" and self.timer.expired():
+                        self.end_run("TIME UP")
                         continue
-                self.draw(mission)
+                self.draw(self.deck[self.index])
                 key = self.key()
-                if key in ("\x1b", "\x03"):
+                if self.phase == "ready" and not self.suspension:
+                    self.poll_practice()
+                if self.phase == "finished":
+                    continue
+                if not self.handle_key(key):
+                    self.close_owned_menu()
+                    if self.mode == "speed":
+                        self.timer.suspend()
+                        self.save_score()
                     return
-                if key == curses.KEY_RESIZE or key is None:
-                    continue
-                if self.scroll_key(key):
-                    continue
-                if key == curses.KEY_F1:
-                    self.hinted, self.help = True, True
-                elif key == curses.KEY_F3:
-                    self.missed.append(mission)
-                    self.advance("Skipped. Replay it after the last mission.")
-                elif key in ("\n", "\r", curses.KEY_ENTER) and not self.active:
-                    h, w = self.screen.getmaxyx()
-                    if h >= 16 and w >= 38:
-                        try:
-                            self.start_practice(mission)
-                        except (ShellError, OSError, KeyError, ValueError) as exc:
-                            self.notice = str(exc)
-                elif isinstance(key, str) and key.isprintable():
-                    self.notice = "Use the full Super+Alt shortcut. Typing its letter does not perform the mission."
 
 
 def run_game(context=None):
@@ -375,9 +728,9 @@ def run_game(context=None):
     if own:
         context = resolve_context(SimpleNamespace(pane=own, active=False))
     if context is None:
-        raise ShellError("Key Quest must run in its practice plugin pane.")
+        raise ShellError("Learning must run in its practice plugin pane.")
     if os.environ.get("HERDR_SHELL_GAME_WORKSPACE") != context.workspace:
-        raise ShellError("Key Quest was not opened in its own practice workspace. Run herdr-shell learn.")
+        raise ShellError("Learning was not opened in its own practice workspace. Run herdr-shell learn.")
     context.validate()
     context.client.call("pane.zoom", pane_id=context.pane, mode="off")
     from . import practice

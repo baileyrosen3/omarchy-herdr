@@ -28,8 +28,8 @@ def parser():
     sub = p.add_subparsers(dest="command", required=True)
     for name in ("menu", "settings"):
         sub.add_parser(name).add_argument("--inline", action="store_true", help="Run here instead of opening a popup")
-    learn = sub.add_parser("learn", help="Welcome, guided walkthrough, or a practice game in a new workspace")
-    learn.add_argument("mode", nargs="?", choices=["welcome", "walkthrough", "game"], default="welcome")
+    learn = sub.add_parser("learn", help="Read-only walkthrough, hands-on practice, or timed Speed Run")
+    learn.add_argument("mode", nargs="?", choices=["welcome", "walkthrough", "hands-on", "game"], default="welcome")
     commands = sub.add_parser("commands")
     commands.add_argument("--json", action="store_true")
     action = sub.add_parser("action").add_subparsers(dest="action_command", required=True)
@@ -341,7 +341,7 @@ def dispatch(args):
             raise ShellError("The learning game must run in its own Herdr pane.")
     context = resolve_context(args)
     if args.command == "learn":
-        return execute("learn-game" if args.mode == "game" else args.mode, context)
+        return execute({"hands-on": "learn-hands-on", "game": "learn-game"}.get(args.mode, args.mode), context)
     if args.command == "_learn":
         from .trainer import run_game
         return run_game(context)
