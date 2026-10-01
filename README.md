@@ -1,408 +1,161 @@
-<p align="center">
-  <img src="docs/assets/cover.svg" alt="Herdr × Omarchy — your desktop shortcuts, inside your terminal" width="100%">
-</p>
+<p align="center"><img src="docs/assets/cover.svg" alt="Herdr × Omarchy — direct shortcuts for your terminal workspace" width="100%"></p>
 
-<h1 align="center">Herdr × Omarchy</h1>
+# Herdr × Omarchy
 
-<p align="center">
-  <strong>One set of shortcuts. From your desktop to your terminal workspace.</strong><br>
-  A community Herdr plugin with focused Omarchy controls, a searchable command menu,<br>
-  agent and tool panes, and configuration you can preview and undo.
-</p>
+**One chord for your everyday Herdr actions.** Split, swap, navigate, launch agents,
+and open Lazygit with **Super+Alt**, while keeping your Omarchy shortcuts.
 
-<p align="center">
-  <a href="#install"><img alt="Status: early preview" src="https://img.shields.io/badge/status-early_preview-e0af68?style=flat-square"></a>
-  <a href="https://herdr.dev/"><img alt="Herdr 0.9.0 or newer" src="https://img.shields.io/badge/Herdr-0.9.0%2B-7dcfff?style=flat-square"></a>
-  <img alt="Python 3.11 or newer" src="https://img.shields.io/badge/Python-3.11%2B-7aa2f7?style=flat-square">
-  <a href="LICENSE"><img alt="Code license: MIT" src="https://img.shields.io/badge/code-MIT-9ece6a?style=flat-square"></a>
-</p>
-
-<p align="center">
-  <a href="#install">Install</a> ·
-  <a href="#shortcuts">Shortcuts</a> ·
-  <a href="#the-control-menu">Control menu</a> ·
-  <a href="#update">Update</a> ·
-  <a href="#troubleshooting">Troubleshooting</a> ·
-  <a href="docs/ui-ux-audit.md#manual-test-guide">Manual test guide</a>
-</p>
-
----
-
-## Your workspace, under your fingers
-
-Focus a Herdr terminal and **Super+Space** opens your workspace controls.
-**Super+A** starts an agent beside your current pane. **Super+G** opens Lazygit
-in that pane's directory. Arrow keys move through panes, then continue through
-tabs or workspaces when you reach an edge.
-
-Focus another application and your original desktop shortcuts apply again.
-
-| Feature | What it does |
-| --- | --- |
-| **Focused Super keys** | Route familiar desktop chords into the foreground Herdr client. |
-| **Pane-first navigation** | Move to the nearest pane; continue to tabs or workspaces at an edge. |
-| **Agents beside your work** | Launch the Omarchy agent picker in a regular pane, in the same tab and directory. |
-| **A complete control menu** | Search commands, browse every action, switch destinations, and configure Herdr. |
-| **Editable native shortcuts** | See inherited defaults and overrides, detect conflicts, and disable or restore bindings. |
-| **Preview and undo** | Review config changes, validate with Herdr, reload, and undo managed edits. |
-
-The registered plugin name is **Herdr Shell**, with ID **`blr.herdr-shell`**.
-The repository is **`omarchy-herdr`** and the helper command is **`herdr-shell`**.
+Herdr Shell (`blr.herdr-shell`) uses your existing Herdr's plugin system and API.
+An Omarchy companion manages the Herdr plugin and a Hyprland bridge that checks
+conflicts before routing free chords to focused local Herdr. Your Herdr binary,
+desktop bindings, and appearance settings stay in place. This is a development preview.
 
 ## Install
 
-### Requirements
+Requires **Linux, Herdr 0.9.3+, Python 3.11+, curses, and tomlkit**. Direct shortcuts
+also require Omarchy's **Lua Hyprland config**, its `require("default.hypr.omarchy")`
+loader, `hyprctl`, and `luac`. Agents use Omarchy's configured default, or its picker;
+Lazygit requires `lazygit`. Editor/files popups use `$VISUAL`/`$EDITOR` (default
+`nvim`) and `yazi` or `ranger`.
 
-- **Linux and Herdr 0.9.0+**, with a local Herdr session running.
-- **Python 3.11+**, curses, and `tomlkit`.
-- For Super keys: **Omarchy's Lua-based Hyprland configuration**, including
-  `~/.config/hypr/hyprland.lua` and its `require("default.hypr.omarchy")` loader.
-- `luac` and `hyprctl` for desktop integration validation and reload.
-
-Optional tools: `lazygit`, an editor selected through `$VISUAL` / `$EDITOR`
-(default: `nvim`), and `yazi` or `ranger`. Agent panes use
-`omarchy agent --inline --pick`; set up your preferred agent through Omarchy.
-
-> [!NOTE]
-> **Early preview.** Developed against Herdr 0.9.0 and Omarchy's Lua Hyprland
-> configuration. Older `hyprland.conf` setups are outside the desktop bridge's
-> current scope. The latest menu changes have syntax/import checks; their live
-> verification is documented in the [manual test guide](docs/ui-ux-audit.md#manual-test-guide).
-
-### 1. Get the plugin
-
-On Omarchy / Arch:
+Run from **any terminal**:
 
 ```sh
 sudo pacman -S --needed git python python-tomlkit lua
-
-mkdir -p ~/.local/share/herdr-plugins
-git clone https://github.com/baileyrosen3/omarchy-herdr.git ~/.local/share/herdr-plugins/omarchy-herdr
-cd ~/.local/share/herdr-plugins/omarchy-herdr
+omarchy plugin add https://github.com/baileyrosen3/omarchy-herdr.git --enable
 ```
 
-### 2. Install inside a Herdr pane
+Omarchy clones the repository automatically. The companion sets up Herdr and
+free desktop shortcuts in the background within a few seconds. If Herdr is not
+running yet, open it normally; no restart is needed. Add `~/.local/bin` to `PATH`
+for `herdr-shell`.
 
-```sh
-# Preview the Herdr shortcut changes.
-./bin/herdr-shell install
+**Migrating from a developer-linked installation?** From any Herdr pane, run
+`herdr-shell remove --apply` before the Omarchy add command. It keeps the old
+checkout, settings, and history. The companion preserves an existing developer
+installation until you remove its integration. See [Contributing](CONTRIBUTING.md)
+for the checkout-based development workflow.
 
-# Link the plugin, add the helper, save shortcuts, and reload Herdr.
-./bin/herdr-shell install --apply
-```
+**Super+Alt+M** opens/closes the menu. Existing **Super+Ctrl+Enter** still opens
+Herdr, and **Super+Space** keeps the Omarchy menu. Occupied chords remain reserved;
+the menu reports which shortcuts are ready. Native recovery uses your Herdr prefix,
+then **Space** for the menu or **Alt+K** for keybindings. With Omarchy's Ctrl+Space
+prefix, press it, release, then press Space.
+Outside Herdr, or with the profile off, its chords pass through to the focused app.
 
-This creates `~/.local/bin/herdr-shell` and adds two native prefix shortcuts.
-Use your Herdr prefix, followed by **Space** for the menu or **Alt+K** for
-keybindings. For a `Ctrl+Space` prefix, press **Ctrl+Space**, release it, then
-press **Space**.
+## All 26 direct shortcuts
 
-Keep the checkout in place: Herdr links directly to this directory. Make sure
-`~/.local/bin` is on your shell's `PATH` to use the short helper command.
-
-### 3. Enable focused Super keys
-
-From the same checkout:
-
-```sh
-# Preview the Hyprland loader change.
-./bin/herdr-shell desktop install
-
-# Back up the config, install the bridge, reload, and check for new errors.
-./bin/herdr-shell desktop install --apply
-```
-
-Focus your Herdr terminal and press **Super+Space**.
-
-The menu is a **Herdr plugin**; the Super-key integration is a **Hyprland Lua
-bridge**. The steps above install both parts.
-
-## Shortcuts
-
-### Open and create
-
-| Shortcut | Action inside focused Herdr |
-| --- | --- |
-| **Super+Space** | Open the control menu |
-| **Super+K** | Open keybindings |
-| **Super+,** | Open Appearance & Settings |
-| **Super+T** | Create a tab in the current pane's directory |
-| **Super+Shift+T** | Create a workspace in the current pane's directory |
-| **Super+A** | Open the Omarchy agent picker in a new pane to the right |
-| **Super+G** | Open Lazygit in a regular pane to the right |
-| **Super+Shift+N** | Open your editor in a popup in the current pane's directory |
-| **Super+Shift+F** | Open Yazi or ranger in a popup in the current pane's directory |
-| **Super+U** | Create a pane **above** |
-| **Super+D** | Create a pane **below** |
-| **Super+L** | Create a pane to the **left** |
-| **Super+R** | Create a pane to the **right** |
-| **Super+M** | Zoom the pane to fill the Herdr tab; press again to restore |
-| **Super+X** | Close the focused pane **immediately** |
-
-New panes, agents, and Lazygit use the originating pane's directory.
-Lazygit and agents open as regular panes in the same tab. Editor and file-browser
-actions open popups.
-
-**Super+X closes without confirmation.** The menu's Close pane command presents
-a confirmation with Cancel selected first.
-
-### Move through your workspace
-
-| Shortcut | First choice | At a pane edge |
-| --- | --- | --- |
-| **Super+Left** | Pane to the left | Previous tab |
-| **Super+Right** | Pane to the right | Next tab |
-| **Super+Up** | Pane above | Previous Herdr workspace |
-| **Super+Down** | Pane below | Next Herdr workspace |
-
-Tabs and workspaces wrap at the ends. A destination restores its selected pane.
-The tab fallback stays within the current workspace.
-
-| Shortcut | Jump directly |
-| --- | --- |
-| **Super+P** | Open the workspace picker |
-| **Super+Shift+P** | Open the pane picker across tabs and workspaces |
-| **Super+Shift+A** | Focus the next agent waiting for input |
-
-Waiting agents are panes Herdr reports as blocked. If none are waiting, the
-shortcut shows a notification and keeps your current pane focused.
-
-### Arrange and resize
-
-| Shortcut | Action |
-| --- | --- |
-| **Super+Shift+arrows** | Swap the pane with its neighbor |
-| **Super+Ctrl+Left / Right** | Switch tabs directly |
-| **Super+1…9, 0** | Select existing workspace 1…10 |
-| **Super+Shift+1…9, 0** | Move the pane to that existing workspace |
-| **Super+Minus / Equal** | Resize left / right |
-| **Super+Shift+Minus / Equal** | Resize up / down |
-
-Workspace number shortcuts select existing workspaces. Create new ones with
-**Super+Shift+T** or from the menu first.
-
-**Desktop behavior:** Super+F, Super+W, Super+Enter, Super+V, Alt+Tab, and
-Super+Tab retain their desktop roles. The bridge preserves the actual desktop
-dispatchers for mapped shortcuts when Herdr is not focused, including personal
-overrides. For example, Super+T creates a Herdr tab while Herdr is focused and
-keeps its desktop floating/tiling action elsewhere. If a chord has no desktop
-binding, it passes through to the focused application outside Herdr.
-
-## The control menu
-
-**Super+Space** brings together seven sections:
-
-| Section | Inside |
-| --- | --- |
-| **Home** | Frequently used agents, tools, panes, tabs, and settings |
-| **All** | Every menu action, alphabetically |
-| **Launch** | Agents, Lazygit, editor, and file browser |
-| **Navigate** | Pane focus, destination pickers, and waiting agents |
-| **Panes** | Split, swap, resize, zoom, and close |
-| **Workspaces** | Tabs, workspaces, and moving panes between them |
-| **Configure** | Keybindings, appearance, desktop integration, reload, and undo |
-
-Type to search every section. The header shows the originating workspace, tab,
-directory, and Super-key status. Wide windows show a details panel; smaller
-windows keep the action list compact. **F1** always makes the selected item's
-full details available.
-
-The official Herdr ram and Omarchy mark are rendered as terminal art using
-your terminal's colors. Logos appear on the main menu at **88 × 32** or larger.
-Subpages use a compact header. The minimum usable menu size is **46 × 16**.
-
-<details>
-<summary><strong>Menu keyboard reference</strong></summary>
+Hold **Super+Alt**, then press the key below. Shift is written explicitly.
 
 | Key | Action |
 | --- | --- |
-| Up / Down | Select an item |
-| Enter | Run, open, edit, switch, or review the selected item |
-| Tab / Shift+Tab, Left / Right | Change sections on the main menu |
-| Page Up / Page Down | Scroll lists and documents |
-| Home / End | Jump to the beginning / end |
-| Esc | Clear search, go back, then close |
-| F1 | Selected-item details and help |
-| F2 | Keybindings |
-| Ctrl+O / F3 | Settings |
-| Ctrl+Z / F4 | Review undo for the last managed config change |
-| Ctrl+R | Refresh while keeping your place |
-| Ctrl+C | Close the menu, or cancel the current dialog |
+| **M** | Toggle the control menu |
+| **U / D / L / R** | Split above / below / left / right |
+| **Shift+U / Shift+D / Shift+L / Shift+R** | Swap with the pane above / below / left / right |
+| **J** | Rotate the nearest two-pane split between stacked and side by side |
+| **Z** | Zoom / restore the pane |
+| **X** | Close the pane |
+| **P / Shift+P** | Next / previous pane in this tab |
+| **T / W** | Create / close a tab |
+| **Shift+T / Shift+W** | Create / close a workspace |
+| **PageUp / PageDown** | Previous / next tab |
+| **Shift+PageUp / Shift+PageDown** | Previous / next workspace |
+| **A** | Start your default Omarchy agent in a pane to the right |
+| **Q / Shift+Q** | Next / previous agent by priority |
+| **V** | Open Lazygit in a pane to the right |
 
-Search, selection, and scroll position survive editing and refreshing. Returning
-from a subpage restores the previous view. This is a keyboard-first interface.
+Omarchy's native **Ctrl+Alt+arrows** focus neighboring panes; focus stops at an
+edge. **Ctrl+Alt+Shift+arrows** resize. Tab, workspace, and pane cycles wrap.
+New panes, tabs, workspaces, agents, and Lazygit inherit the originating directory.
 
-</details>
+Agent sweeps visit **approval/input → done → working → idle**, keeping their order
+stable through each sweep so status changes cannot trap you on one agent.
+Closing an idle shell runs directly; agents, running work, and uncertain activity
+require confirmation with **Cancel selected first**. Tab/workspace close checks
+all affected panes. Menu and direct close commands use the same policy.
 
-## Configure with a preview
+## The control menu
 
-Choose a setting, review its before/after values and diff, then apply. Herdr
-validates the configuration before it is saved and reloaded.
+Home is a grouped, **one-line shortcut sheet covering all 26 chords**. Inactive or
+limited commands remain visible with a marker; **F1** explains the selected action,
+its full chord, and any restriction. Other sections are All, Launch, Navigate,
+Panes, Workspaces, and Configure. Search reaches every command and destination.
 
-- **On/Off settings** use a simple choice dialog.
-- **Fixed-choice settings** show supported options and an inherited-default option.
-- **Text and numeric settings** support cursor movement, Home/End, Delete,
-  and horizontally scrolling input.
-- **Invalid entries** stay in the editor for correction.
-- **Ctrl+Z** previews undo for the last managed config edit.
+Type to search, **↑↓** to select, **Enter** to act, **Tab/Shift+Tab** to change
+sections, and **Esc** to clear search, go back, or close. **F2** opens Keybindings,
+**Ctrl+O/F3** Settings, **Ctrl+R** refreshes, and **Ctrl+Z/F4** reviews config undo.
+Search and selection survive editing and refresh. The menu uses your terminal
+palette and retains the Herdr/Omarchy branding; minimum size is **46 × 16**.
 
-Config transactions preserve comments and unrelated fields. If reload fails,
-the previous file is restored unless a concurrent edit makes that unsafe.
-Undo preserves unrelated later edits and rejects conflicts on the same field.
+## Learn by doing
 
-### Native keybindings
-
-Open **Super+K**, select a native binding, and enter a shortcut such as
-`prefix+f`. Multiple bindings use TOML arrays:
-
-```toml
-["prefix+f", "alt+f"]
-```
-
-Leave the input blank to disable a binding. **Ctrl+D** restores an inherited
-native default. **Ctrl+U** clears an editor field; on the keybindings list it
-shows or hides unassigned entries. Search always includes unassigned entries.
-
-Super profile rows are read only in this editor. Toggle the profile through
-**Configure → Omarchy controls**, or:
+First use offers **Walkthrough**, **Learning game**, or **Open menu**; Esc skips
+onboarding. Reopen it by searching `learn`, or use:
 
 ```sh
-herdr-shell desktop disable
-herdr-shell desktop enable
+herdr-shell learn
+herdr-shell learn walkthrough
+herdr-shell learn game
 ```
 
-When disabled, Super+Space uses its desktop action. Reopen Herdr Shell with
-the native prefix shortcut or `herdr-shell menu`.
+The walkthrough is read-only. **Herdr Key Quest** creates its own practice
+workspace: **26 shortcut questions, 8 safe live drills, and 5 feature questions**.
+Live drills verify actual pane/tab changes after you press a shortcut. Agent
+launches and closing work are taught through questions. **F1** hints, **F3** skips,
+and the results screen can replay skipped challenges. Recall works without the
+bridge; live drills need their shortcut active. Esc leaves the practice workspace
+available for you to close when finished.
 
-## Update
+## Settings and tools
 
-Run inside Herdr, from your checkout:
-
-```sh
-cd ~/.local/share/herdr-plugins/omarchy-herdr
-git pull --ff-only
-./bin/herdr-shell install --apply
-./bin/herdr-shell desktop install --apply
-```
-
-Reopen the menu to load the updated Python code. Reinstalling refreshes the
-linked manifest and generated desktop bridge. Skip the last command if you
-use only native Herdr shortcuts.
-
-## CLI
-
-The same action catalog powers the menu and the CLI:
+Browse native defaults/overrides, edit or disable shortcuts, and inspect conflicts.
+Super+Alt profile rows show live status and are read-only. Settings and native key
+edits offer a diff before apply/reload; undo preserves unrelated later changes.
+Installation keeps your theme. **Use terminal colors** optionally makes Herdr's
+main interface follow your terminal palette. Editor and file-browser popups,
+pane/tab/workspace pickers, and moving panes are available from the menu.
 
 ```sh
-herdr-shell menu
-herdr-shell commands
-herdr-shell keybindings list
-herdr-shell settings
-herdr-shell launch git
-herdr-shell action run pane-split-right
-herdr-shell config check
-herdr-shell doctor
-```
-
-<details>
-<summary><strong>Configuration, scripting, and explicit targets</strong></summary>
-
-```sh
-herdr-shell commands --json
-herdr-shell keybindings --json
-
-# Preview a change; add --apply to validate, save, and reload.
-herdr-shell keybindings set zoom prefix+f
-herdr-shell keybindings set zoom prefix+f --apply
-herdr-shell keybindings disable zoom --apply
-herdr-shell config set ui.pane_gaps false
-herdr-shell config set ui.pane_gaps false --apply
-
-herdr-shell config reload
-herdr-shell config undo --dry-run
-herdr-shell config undo --yes
-herdr-shell theme sync
 herdr-shell desktop status
+herdr-shell desktop disable               # Native recovery still opens the menu
+herdr-shell desktop enable                # Recheck desktop conflicts before enabling
+herdr-shell doctor
 herdr-shell logs
 ```
 
-Inside Herdr, commands use the calling pane. Outside it, select a local session
-and pane explicitly; global options go before the command:
+## Update or remove
+
+Use Omarchy's normal plugin commands from any terminal:
 
 ```sh
-herdr-shell --session my-session --pane w1:p1 menu
-herdr-shell --session my-session --active menu
+omarchy plugin update blr.herdr-shell
+omarchy plugin remove blr.herdr-shell
+omarchy plugin disable blr.herdr-shell     # Pause the companion
+omarchy plugin enable blr.herdr-shell      # Resume it
 ```
 
-Popups require the originating pane to be active. Actions retain its socket and
-terminal identity. Moving or replacing that pane invalidates the saved target.
+The companion refreshes Herdr after Omarchy updates the package, preserving
+custom fallback keys, your theme, and a disabled shortcut profile. Reopen the
+menu to load new code. A private runtime copy keeps cleanup available after
+Omarchy removes its checkout. Cleanup removes this plugin's integration;
+personal settings, caches/history, and practice workspaces remain.
 
-</details>
+Use `herdr-shell doctor` to inspect managed setup and live shortcut status.
+Developer update/removal scripts are documented in [Contributing](CONTRIBUTING.md).
 
-## Troubleshooting
+## Limits and help
 
-| Symptom | What to check |
-| --- | --- |
-| Super+Space still opens the desktop menu | Focus a local Herdr terminal, run `herdr-shell desktop status`, and enable/install the bridge. |
-| The helper command is missing | Add `~/.local/bin` to `PATH`, or run `./bin/herdr-shell` from the checkout. |
-| `No module named tomlkit` | Install `python-tomlkit` for the system `python3` used by the plugin. |
-| Installer cannot find the Omarchy loader | Check that your setup uses `hyprland.lua` with the required default loader; native Herdr menu shortcuts remain available. |
-| Shortcut collision during install or editing | Read the reported conflicting actions and choose an unused native chord. The conflicting change is not applied. |
-| A tool is marked unavailable | Install the named tool or configure `$VISUAL` / `$EDITOR`; the menu does not install tools. |
-| A workspace number does nothing | Create that Herdr workspace first; number shortcuts do not create workspaces. |
-| Arrow navigation reaches another tab/space | This is the pane-edge fallback. Use native pane-focus commands when you only want pane movement. |
-| An error occurs after the popup closes | Check `herdr-shell logs` and `${XDG_STATE_HOME:-~/.local/state}/herdr-shell/actions.log`. |
+The desktop bridge requires one identifiable **local foreground Herdr client**.
+Remote SSH clients use native bindings; independent client focus in shared sessions
+is outside this preview's guarantees. Rotation supports the nearest split with
+**two leaf panes**; nested sibling groups remain unchanged. Older `hyprland.conf`
+setups do not support this Lua bridge.
 
-### Compatibility boundaries
+If a chord is unavailable, check `herdr-shell desktop status`, use native recovery,
+or run `herdr-shell menu`. For UI details and testing, see the
+[manual guide and audit](docs/ui-ux-audit.md), [Contributing](CONTRIBUTING.md),
+and [Changelog](CHANGELOG.md). Report issues with your Herdr version, terminal
+size, selected page/action, and exact keys.
 
-- The desktop bridge targets a **single identifiable local foreground Herdr
-  client** in the focused window. Ambiguous process trees are not routed.
-- Direct SSH clients do not have a verified remote target for desktop routing;
-  use their native Herdr shortcuts.
-- Desktop routing reads the selected local session's focused pane. Independent
-  per-client focus in a shared session is outside this preview's guarantees.
-- The plugin includes menu commands and a desktop bridge. Den integration,
-  saved layouts, and project presets are outside the current release.
-- Theme sync selects Herdr's terminal palette. It does not install an automatic
-  desktop theme-change hook.
-
-## Uninstall
-
-Remove the desktop bridge while the helper is still available:
-
-```sh
-herdr-shell desktop remove
-herdr-shell desktop remove --apply
-```
-
-Remove the two `[[keys.command]]` entries in your Herdr config whose commands
-are `blr.herdr-shell.menu` and `blr.herdr-shell.keybindings`, then reload:
-
-```sh
-herdr-shell config reload
-herdr plugin unlink blr.herdr-shell
-```
-
-Remove `~/.local/bin/herdr-shell` if it still points to this checkout. You can
-then remove the checkout. Config history remains under
-`${XDG_STATE_HOME:-~/.local/state}/herdr-shell/config/`; desktop backups are in
-the adjacent `desktop/` directory.
-
-## Development and feedback
-
-- [UI/UX audit and manual test guide](docs/ui-ux-audit.md)
-- [Contributing](CONTRIBUTING.md)
-- [Changelog](CHANGELOG.md)
-- [Report an issue](https://github.com/baileyrosen3/omarchy-herdr/issues)
-
-When reporting a UI issue, include your Herdr version, terminal dimensions,
-page, selected row, and the exact key sequence. The manual guide covers menus,
-editing, undo, destination pickers, integration state, and small-window behavior.
-
-## License and credits
-
-Plugin code is [MIT licensed](LICENSE). Built for [Herdr](https://herdr.dev/)
-and [Omarchy](https://omarchy.org/), maintained as a community integration.
-
-Herdr and Omarchy names and marks belong to their respective owners. Upstream
-brand assets are covered by their owners' terms, separately from the plugin's
-code license. See [logo sources and attribution](assets/branding/README.md).
+[MIT license](LICENSE). Built for [Herdr](https://herdr.dev/) and
+[Omarchy](https://omarchy.org/); see [brand attribution](assets/branding/README.md).

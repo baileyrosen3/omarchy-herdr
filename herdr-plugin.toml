@@ -2,9 +2,9 @@
 id = "blr.herdr-shell"
 name = "Herdr Shell"
 version = "0.1.0"
-min_herdr_version = "0.9.0"
+min_herdr_version = "0.9.3"
 platforms = ["linux"]
-description = "Search actions, edit keybindings, and manage configuration with undo."
+description = "Direct Omarchy shortcuts, a searchable menu, learning tools, and configuration with undo."
 
 [[actions]]
 id = "menu"
@@ -26,9 +26,27 @@ command = ["python3", "bin/herdr-shell", "action", "run", "settings"]
 
 [[actions]]
 id = "desktop-setup"
-title = "Set up Omarchy controls"
+title = "Set up Herdr shortcuts"
 contexts = ["pane"]
 command = ["python3", "bin/herdr-shell", "action", "run", "desktop-setup"]
+
+[[actions]]
+id = "welcome"
+title = "Welcome / learn Herdr"
+contexts = ["pane"]
+command = ["python3", "bin/herdr-shell", "action", "run", "welcome"]
+
+[[actions]]
+id = "walkthrough"
+title = "Learn: guided walkthrough"
+contexts = ["pane"]
+command = ["python3", "bin/herdr-shell", "action", "run", "walkthrough"]
+
+[[actions]]
+id = "learn-game"
+title = "Learn: play Key Quest"
+contexts = ["pane"]
+command = ["python3", "bin/herdr-shell", "action", "run", "learn-game"]
 
 [[actions]]
 id = "workspace-picker"
@@ -59,6 +77,30 @@ id = "agent-next-waiting"
 title = "Next waiting agent"
 contexts = ["pane"]
 command = ["python3", "bin/herdr-shell", "action", "run", "agent-next-waiting"]
+
+[[actions]]
+id = "agent-cycle-next"
+title = "Next agent by priority"
+contexts = ["pane"]
+command = ["python3", "bin/herdr-shell", "action", "run", "agent-cycle-next"]
+
+[[actions]]
+id = "agent-cycle-previous"
+title = "Previous agent by priority"
+contexts = ["pane"]
+command = ["python3", "bin/herdr-shell", "action", "run", "agent-cycle-previous"]
+
+[[actions]]
+id = "pane-cycle-next"
+title = "Next pane in tab"
+contexts = ["pane"]
+command = ["python3", "bin/herdr-shell", "action", "run", "pane-cycle-next"]
+
+[[actions]]
+id = "pane-cycle-previous"
+title = "Previous pane in tab"
+contexts = ["pane"]
+command = ["python3", "bin/herdr-shell", "action", "run", "pane-cycle-previous"]
 
 [[actions]]
 id = "workspace-previous"
@@ -151,10 +193,28 @@ contexts = ["pane"]
 command = ["python3", "bin/herdr-shell", "action", "run", "pane-zoom"]
 
 [[actions]]
+id = "pane-rotate"
+title = "Rotate two-pane split"
+contexts = ["pane"]
+command = ["python3", "bin/herdr-shell", "action", "run", "pane-rotate"]
+
+[[actions]]
 id = "pane-close"
 title = "Close pane"
 contexts = ["pane"]
-command = ["python3", "bin/herdr-shell", "_confirm", "pane-close"]
+command = ["python3", "bin/herdr-shell", "action", "run", "pane-close"]
+
+[[actions]]
+id = "tab-close"
+title = "Close tab"
+contexts = ["pane"]
+command = ["python3", "bin/herdr-shell", "action", "run", "tab-close"]
+
+[[actions]]
+id = "workspace-close"
+title = "Close workspace"
+contexts = ["pane"]
+command = ["python3", "bin/herdr-shell", "action", "run", "workspace-close"]
 
 [[actions]]
 id = "theme-terminal"
@@ -297,3 +357,9 @@ id = "git"
 title = "Lazygit"
 placement = "split"
 command = ["lazygit"]
+
+[[panes]]
+id = "trainer"
+title = "Herdr Key Quest"
+placement = "split"
+command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/bin/herdr-shell\" _learn"]

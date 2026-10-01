@@ -82,10 +82,30 @@ def exercise(root, client):
     try:
         eventually(lambda: "Shell QA" in screen(), "Herdr terminal attach")
         keys("C-Space", "Space")
+        eventually(lambda: "Welcome to Herdr Shell" in screen(), "first-use welcome")
+        keys("Enter")
+        eventually(lambda: "One shortcut family" in screen(), "walkthrough opens from welcome")
+        keys("Right")
+        eventually(lambda: "Split and swap" in screen(), "walkthrough next page")
+        keys("Left")
+        eventually(lambda: "One shortcut family" in screen(), "walkthrough previous page")
+        keys("Escape")
+        eventually(lambda: "One shortcut family" not in screen(), "walkthrough dismissal")
+        keys("C-Space", "Space")
         eventually(lambda: "HERDR  ×  OMARCHY" in screen(), "menu shortcut opens popup")
+        assert "Welcome to Herdr Shell" not in screen()
+        checks.append("first-use welcome, walkthrough next/back, dismissal and non-repeating welcome")
         (ROOT / "docs").mkdir(exist_ok=True)
         (ROOT / "docs/menu-capture.txt").write_text(screen())
         checks.append("real prefix shortcut opens native popup")
+
+        keys("End")
+        eventually(lambda: "26/26" in screen() and "Close menu" in screen(), "all shortcuts reachable on Home")
+        keys("Enter")
+        eventually(lambda: "HERDR  ×  OMARCHY" not in screen(), "menu reference entry dismisses popup")
+        keys("C-Space", "Space")
+        eventually(lambda: "Hold Super+Alt" in screen(), "compact Home reopens")
+        checks.append("compact Home lists 26 shortcuts and menu toggle dismisses instead of reopening")
 
         keys("F2")
         eventually(lambda: "Keybindings" in screen(), "keybinding screen")
@@ -148,6 +168,18 @@ def exercise(root, client):
         eventually(lambda: "HERDR_TOOL_PROBE" not in screen(), "tool exit restores terminal")
         checks.append("tool popup launch and automatic close")
 
+        # The close policy skips confirmation for idle shells. Run disposable
+        # work in this probe's captured pane to exercise the confirming path.
+        literal("sleep 60")
+        keys("Enter")
+
+        def running_sleep():
+            result = client.call("pane.process_info", pane_id=context.pane)
+            info = result.get("process_info", result)
+            return next((process for process in info.get("foreground_processes", [])
+                         if process.get("name") == "sleep"), None)
+
+        running = eventually(running_sleep, "disposable foreground work starts")
         before_panes = len(client.snapshot()["panes"])
         client.call("plugin.action.invoke", action_id=PLUGIN_ID + ".pane-close",
                     context={"focused_pane_id": context.pane, "workspace_id": context.workspace,
@@ -156,7 +188,10 @@ def exercise(root, client):
         keys("Escape")
         eventually(lambda: "keep the pane" not in screen(), "cancel close confirmation")
         assert len(client.snapshot()["panes"]) == before_panes
-        checks.append("registered close action confirms and cancellation preserves panes")
+        assert running_sleep()["pid"] == running["pid"]
+        keys("C-c")
+        eventually(lambda: not running_sleep(), "disposable work stops after cancellation check")
+        checks.append("registered close action confirms running work and cancellation preserves its process")
     except Exception:
         print("SCREEN\n" + screen(), flush=True)
         log = root / "state/herdr-shell/actions.log"

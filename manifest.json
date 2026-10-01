@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "blr.herdr-shell",
+  "name": "Herdr Shell",
+  "version": "0.1.0",
+  "author": "blr",
+  "description": "Focused Herdr controls, menus, and learning tools with preserved Omarchy shortcuts.",
+  "kinds": ["service"],
+  "entryPoints": {
+    "service": "omarchy/Service.qml"
+  }
+}

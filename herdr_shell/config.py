@@ -302,10 +302,16 @@ class ConfigStore:
         return result
 
 
-def shortcut_changes(menu_key="prefix+space", bindings_key="prefix+alt+k"):
+def shortcut_changes(menu_key="prefix+space", bindings_key="prefix+alt+k", *, existing=None):
     changes = []
+    commands = tomllib.loads(existing).get("keys", {}).get("command", []) if existing is not None else []
     for action, key, label in [("menu", menu_key, "Herdr Shell menu"),
                                ("keybindings", bindings_key, "Herdr Shell keybindings")]:
+        # Reinstall/update keeps a user's changed, alternative, or disabled
+        # fallback. Explicit config apply can still request the default keys.
+        if any(command.get("type") == "plugin_action" and command.get("command") == f"{PLUGIN_ID}.{action}"
+               for command in commands):
+            continue
         item = {"key": key, "type": "plugin_action", "command": f"{PLUGIN_ID}.{action}", "description": label}
         changes.append((["keys", "command", "@" + command_id(item)], item))
     return changes

@@ -1,13 +1,14 @@
 """Keyboard-first popup UI using the terminal's own colors."""
 import curses
 import json
+import os
 import tomllib
 
-from .actions import CATALOG, catalog_rows
+from .actions import CATALOG, catalog_rows, close_plan, rotation_unavailable
 from .config import ConfigStore, MISSING, bindings, get_value
 from . import desktop
 from . import dialogs
-from .interface import DESCRIPTIONS, HOME, LABELS, SECTIONS, MenuView, fit, section_for
+from .interface import DESCRIPTIONS, HOME, HOME_LABELS, LABELS, SECTIONS, MenuView, fit, section_for
 from .runtime import ShellError
 
 SETTINGS = [
@@ -21,7 +22,7 @@ SETTINGS = [
     ("ui.sidebar_collapsed_mode", "Collapsed sidebar", "compact"),
     ("ui.agent_panel_sort", "Agent ordering", "spaces"),
     ("ui.status_indicators", "Agent status indicators", "dots"),
-    ("ui.confirm_close", "Confirm workspace close", True),
+    ("ui.confirm_close", "Confirm native workspace close", True),
     ("ui.prompt_new_tab_name", "Ask for new tab name", True),
     ("ui.copy_on_select", "Copy selected text", True),
     ("ui.toast.delivery", "Notification delivery", "off"),
@@ -47,7 +48,7 @@ SETTING_HELP = {
     "ui.sidebar_collapsed_mode": "Choose whether a collapsed sidebar keeps a narrow status rail or disappears.",
     "ui.agent_panel_sort": "Group agents by workspace, or bring agents needing attention to the top.",
     "ui.status_indicators": "Symbols make agent states distinguishable without relying on color.",
-    "ui.confirm_close": "Ask before closing a workspace. Super+X still closes a pane immediately.",
+    "ui.confirm_close": "Ask before closing a workspace with Herdr's native command. Herdr Shell asks before closing running agents, tools, or unknown activity.",
     "ui.prompt_new_tab_name": "Ask for a name with Herdr's built-in New tab shortcut. This menu creates tabs immediately.",
     "ui.copy_on_select": "Copy selected terminal text to the clipboard automatically.",
     "ui.toast.delivery": "Choose where Herdr delivers background notifications.",
@@ -76,6 +77,8 @@ class Menu:
         self.visible_rows = 1
         self.location = "Current workspace"
         self.controls_enabled = False
+        self.controls_ready = 0
+        self.controls_conflicts = 0
         self.show_unassigned = False
         self.history = []
         self.search_origin = None
@@ -139,6 +142,10 @@ class Menu:
         if not preserve:
             self.query, self.selected, self.scroll, self.search_origin = "", 0, 0, None
         self.controls_enabled = desktop.installed() and desktop.enabled()
+        profile = [dict(row) for row in desktop.profile_rows()]
+        direct_rows = [row for row in profile if row["kind"] == "desktop-binding" and row.get("action_id")]
+        self.controls_ready = sum(bool(row.get("active")) for row in direct_rows)
+        self.controls_conflicts = sum(row.get("status") == "conflict" for row in direct_rows)
         snapshot = self.context.client.snapshot()
         workspace = next((r for r in snapshot["workspaces"] if r["workspace_id"] == self.context.workspace), {})
         tab = next((r for r in snapshot["tabs"] if r["tab_id"] == self.context.tab), {})
@@ -148,14 +155,18 @@ class Menu:
             row["keys"] = [key for key in row["keys"] if key.strip()]
         prefix = next((r["keys"][0] for r in key_rows if r["id"] == "prefix" and r["keys"]), "ctrl+space")
         if self.page == "keybindings":
-            self.items = desktop.profile_rows()
+            self.items = profile
             for row in self.items:
                 if row["kind"] == "desktop-binding":
-                    row["label"] += " (profile)"
-                    row["description"] = ("Read-only desktop shortcut. " +
-                        ("This remains a desktop action." if row["scope"] == "Desktop" else
-                         "Active only while Herdr is focused." if self.controls_enabled else
-                         "Herdr routing is off. Enable Omarchy controls to use this shortcut in Herdr."))
+                    if row.get("scope") == "Desktop":
+                        row["label"] += " (desktop)"
+                        row["description"] = "Preserves its existing desktop role, including while Herdr is focused."
+                        continue
+                    status = row.get("status", "unavailable")
+                    row["label"] += " (profile · " + status + ")"
+                    row["description"] = "Read-only Super+Alt shortcut. " + (row.get("reason") or (
+                        "Active only while Herdr is focused." if row.get("active") else
+                        "This shortcut is currently unavailable."))
             for r in key_rows:
                 scopes = set("Herdr prefix" if k.startswith("prefix+") else
                              "Herdr navigation" if r.get("mode") == "navigate" else "Herdr direct" for k in r["keys"])
@@ -165,7 +176,7 @@ class Menu:
                                        scope=" / ".join(sorted(scopes)) or "Herdr", kind="binding"))
         elif self.page == "settings":
             doc = tomllib.loads(self.base)
-            self.items = desktop.profile_rows()[:1]
+            self.items = profile[:1]
             for path, label, fallback in SETTINGS:
                 value = get_value(doc, path.split("."))
                 self.items.append({"id": path, "label": label, "path": path.split("."),
@@ -203,14 +214,20 @@ class Menu:
                                    "target_kind": kind, "terminal": row.get("terminal_id")})
         else:
             self.items = []
-            super_keys = {}
-            for key, action, _ in desktop.MAPPINGS:
-                super_keys.setdefault(action, []).append(key)
+            direct_keys = {}
+            direct_unavailable = {}
+            profile_actions = {row["action_id"]: row for row in direct_rows}
+            proposed_keys = {action: key for key, action, _ in desktop.MAPPINGS}
+            for row in direct_rows:
+                if row.get("active"):
+                    direct_keys.setdefault(row["action_id"], []).extend(row["keys"])
+                elif row.get("status") in ("conflict", "unavailable"):
+                    direct_unavailable[row["action_id"]] = row.get("reason") or "The direct shortcut is currently unavailable."
             for row in catalog_rows(key_rows):
-                if row["id"] == "menu":
-                    continue
                 action = row["id"]
-                keys = super_keys.get(action, []) if self.controls_enabled else []
+                if action == "pane-rotate":
+                    row["unavailable"] = rotation_unavailable(self.context)
+                keys = direct_keys.get(action, [])
                 if not keys:
                     keys = row["keys"]
                 description = DESCRIPTIONS.get(action) or row["description"]
@@ -218,12 +235,21 @@ class Menu:
                     description = "Create a shell pane " + action.removeprefix("pane-split-") + " in this tab and directory."
                 if not description and action.startswith("pane-resize-"):
                     description = "Adjust the focused pane's size toward the " + action.removeprefix("pane-resize-") + "."
+                if action in direct_unavailable and action not in direct_keys:
+                    description += " Direct shortcut: " + direct_unavailable[action]
                 item = dict(row, label=LABELS.get(action, row["label"]), keywords=row["label"],
                             keys=keys, detail=" / ".join(desktop.pretty_key(k, prefix) for k in keys),
                             description=description, kind="action", section=section_for(row),
-                            scope="Herdr focused" if action in super_keys and self.controls_enabled else "Herdr")
+                            scope="Herdr focused" if action in direct_keys else "Herdr")
+                if action in proposed_keys:
+                    direct = profile_actions.get(action, {})
+                    full_key = desktop.pretty_key(proposed_keys[action])
+                    item.update(shortcut_key=full_key, shortcut_suffix=full_key.removeprefix("Super+Alt+"),
+                                shortcut_active=bool(direct.get("active")),
+                                shortcut_status=direct.get("status", "unavailable"),
+                                shortcut_reason=direct.get("reason", ""))
                 self.items.append(item)
-            toggle = desktop.profile_rows()[0]
+            toggle = profile[0]
             self.items.append(dict(toggle, section="configure", description=DESCRIPTIONS["desktop-enabled"]))
         for row in self.items:
             if row["id"] == "desktop-enabled":
@@ -239,7 +265,14 @@ class Menu:
                 ("label", "detail", "id", "category", "source", "scope", "description", "keywords", "section")).lower() for word in words)]
         if self.page == "menu" and not words:
             if self.section == "home":
-                return sorted((r for r in rows if r["id"] in HOME), key=lambda r: HOME.index(r["id"]))
+                home = []
+                for row in sorted((r for r in rows if r["id"] in HOME), key=lambda r: HOME.index(r["id"])):
+                    row = dict(row, label=HOME_LABELS[row["id"]], detail=row["shortcut_key"], keys=[row["shortcut_key"]])
+                    if not row["shortcut_active"]:
+                        row["description"] += " Shortcut " + row["shortcut_status"] + ": " + (row["shortcut_reason"] or "Enable the desktop profile in Configure.")
+                        row["description"] += " Enter can still run an available menu action."
+                    home.append(row)
+                return home
             if self.section == "all":
                 return sorted(rows, key=lambda r: r["label"].casefold())
             return [r for r in rows if r.get("section") == self.section]
@@ -393,7 +426,7 @@ class Menu:
             else:
                 desktop.set_enabled(not desktop.enabled())
                 self.load()
-                self.notice = "Super keys enabled in Herdr." if self.controls_enabled else "Super keys now use desktop actions."
+                self.notice = "Super+Alt profile enabled. Conflicting shortcuts stay reserved." if self.controls_enabled else "Super+Alt profile disabled."
             return
         if row["kind"] == "desktop-binding":
             dialogs.document(self, "Desktop shortcut · read only", [row["label"], row["detail"], "", row["description"], "",
@@ -410,6 +443,10 @@ class Menu:
         if row.get("unavailable"):
             raise ShellError(row["unavailable"])
         action = row["id"]
+        if action == "menu":
+            return {"kind": "dismiss"}
+        if action in ("welcome", "walkthrough"):
+            return self.learning(action)
         if action in ("keybindings", "settings", "workspace-picker", "tab-picker", "pane-picker", "pane-workspace-picker"):
             self.open_page(action)
         elif action == "desktop-setup":
@@ -428,24 +465,74 @@ class Menu:
                 self.store.apply(proposal, self.reload_config)
                 self.notice = "Terminal palette selected."
                 self.load()
-        else:
-            if CATALOG[action].confirm and not self.confirm_close():
+        elif action in ("pane-close", "tab-close", "workspace-close"):
+            plan = close_plan(action, self.context)
+            if plan["needs_confirmation"] and not self.confirm_close(plan):
                 return
+            return {"kind": "close", "plan": plan}
+        else:
             return {"kind": "action", "id": action, "yes": CATALOG[action].confirm}
+
+    def learning(self, page):
+        from . import onboarding
+        choice = onboarding.welcome(self) if page == "welcome" else "walkthrough"
+        if choice == "walkthrough":
+            choice = onboarding.walkthrough(self)
+        if choice == "game":
+            return {"kind": "action", "id": "learn-game", "yes": False}
+        return {"kind": "dismiss"} if choice is None else None
 
     def setup_desktop(self):
         proposal = desktop.install_proposal()
         if desktop.installed() or self.review(proposal):
-            self.busy("Setting up focused Super keys…")
+            self.busy("Setting up focused Super+Alt shortcuts…")
             desktop.install_desktop(proposal)
             self.notice = "Omarchy controls enabled for the focused Herdr terminal."
             self.load()
 
-    def confirm_close(self):
-        result = dialogs.choose(self, "Close pane " + self.context.pane + "?",
-                                [(False, "Cancel — keep the pane"), (True, "Close pane and its process")],
-                                help_text="Directory: " + self.context.cwd, footer="↑↓ Select   Enter Confirm   Esc Cancel")
-        return result is True
+    def confirm_close(self, plan):
+        """Keep the target and all affected activity readable before closing."""
+        count = plan["count"]
+        kind = plan["kind"]
+        lines = [f"Closing this {kind} stops {count} pane" + ("." if count == 1 else "s."),
+                 "Running or uncertain activity:", ""]
+        for activity in plan["activity"]:
+            lines.append(activity.get("label") or activity["pane_id"])
+            lines.append("  " + activity["reason"])
+        lines += ["", "Directory: " + self.context.cwd]
+        selected, offset = 0, 0
+        while True:
+            frame = dialogs.Frame(self, plan["title"], height=32, width=110)
+            if not frame.small:
+                wrapped = [part for line in lines for part in dialogs.wrap_cells(line, frame.inner)]
+                visible = max(1, frame.height - 12)
+                offset = max(0, min(offset, max(0, len(wrapped) - visible)))
+                for y, line in enumerate(wrapped[offset:offset + visible], 5):
+                    frame.text(y, line)
+                options = [f"Cancel — keep the {kind}", f"Close {kind} and its " + ("process" if kind == "pane" else "panes")]
+                for index, label in enumerate(options):
+                    frame.text(frame.height - 6 + index, fit(("› " if index == selected else "  ") + label, frame.inner, True),
+                               self.selection if index == selected else curses.A_NORMAL)
+                if len(wrapped) > visible:
+                    frame.text(frame.height - 4, f"{offset + 1}–{min(len(wrapped), offset + visible)} of {len(wrapped)} lines · PgUp / PgDn scroll", curses.A_DIM)
+                frame.footer("↑↓ Select   Enter Confirm   Esc Cancel")
+            key = frame.key()
+            if key in dialogs.ESCAPE:
+                return False
+            if frame.small or key == curses.KEY_RESIZE:
+                continue
+            if key in dialogs.ENTER:
+                return selected == 1
+            if key in (curses.KEY_UP, curses.KEY_DOWN, "\t", curses.KEY_BTAB):
+                selected = 1 - selected
+            elif key == curses.KEY_NPAGE:
+                offset += visible
+            elif key == curses.KEY_PPAGE:
+                offset -= visible
+            elif key == curses.KEY_HOME:
+                offset = 0
+            elif key == curses.KEY_END:
+                offset = len(wrapped)
 
     def help(self):
         rows = self.filtered()
@@ -463,7 +550,7 @@ class Menu:
             "PAGES", "F2 opens Keybindings. Ctrl+O (or F3) opens Settings.",
             "Ctrl+R refreshes without losing your search or selection.",
             "Ctrl+Z (or F4) reviews undo for the last managed configuration change.", "",
-            "KEYBINDINGS", "Super profile rows are read only. Native Herdr rows are editable.",
+            "KEYBINDINGS", "Super+Alt profile rows are read only and show live availability. Native Herdr rows are editable.",
             "Ctrl+U shows or hides unassigned keys. Search always includes them.",
             "Enter a shortcut such as prefix+z; use a TOML array for alternatives.",
             "An empty value disables the shortcut. Ctrl+D restores native key defaults.",
@@ -472,13 +559,22 @@ class Menu:
             "Ctrl+U clears input. Ctrl+W deletes a word. Ctrl+K deletes to the end.",
             "Enter previews a change; Enter again saves and reloads. Esc goes back.",
             "Invalid entries remain in the editor so you can correct them.", "",
-            "FOCUSED CONTROLS", "Super shortcuts affect Herdr only while its terminal is focused.",
-            "Super+X closes the pane immediately. Close pane in this menu asks first.",
+            "FOCUSED CONTROLS", "The Super+Alt profile affects Herdr only while its terminal is focused.",
+            "Existing desktop shortcuts remain reserved, including while Herdr is focused.",
+            "Closing an idle shell runs directly. Running agents, tools, or unknown activity require confirmation.",
+            "Pane focus stops at the edge. Tabs and workspaces have separate commands.",
             "Actions use the pane and directory from which this menu was opened.",
             "Ctrl+C closes the menu; inside a dialog it cancels the dialog.",
         ])
 
     def run(self):
+        from . import onboarding
+        if self.page in ("welcome", "walkthrough") or (self.page == "menu" and onboarding.needs_welcome()):
+            job = self.learning("welcome" if self.page == "menu" else self.page)
+            if job:
+                return None if job["kind"] == "dismiss" else job
+            self.page = "menu"
+            self.load(preserve=False)
         if self.page == "desktop-setup":
             self.page = "settings"
             try:
@@ -486,10 +582,18 @@ class Menu:
                 self.setup_desktop()
             except (ShellError, OSError) as exc:
                 self.show_error(exc)
-        if self.page == "confirm-pane-close":
-            if self.confirm_close():
-                return {"kind": "action", "id": "pane-close", "yes": True}
-            return None
+        if self.page in ("confirm-pane-close", "confirm-tab-close", "confirm-workspace-close"):
+            try:
+                saved = os.environ.get("HERDR_SHELL_CLOSE_PLAN")
+                plan = json.loads(saved) if saved else close_plan(self.page.removeprefix("confirm-"), self.context)
+                if plan["action_id"] != self.page.removeprefix("confirm-"):
+                    raise ShellError("The close confirmation does not match this action. Reopen it from the originating pane.")
+                if plan["needs_confirmation"] and not self.confirm_close(plan):
+                    return None
+                return {"kind": "close", "plan": plan}
+            except (ShellError, OSError, ValueError, KeyError, TypeError) as exc:
+                self.show_error(exc)
+                return None
         if self.page == "confirm-config-undo":
             try:
                 self.undo()
@@ -552,7 +656,7 @@ class Menu:
                 elif key in ("\n", "\r", curses.KEY_ENTER) and rows:
                     result = self.activate(rows[self.selected])
                     if result:
-                        return result
+                        return None if result["kind"] == "dismiss" else result
                 elif key in (curses.KEY_BACKSPACE, "\x7f", "\b"):
                     self.set_query(self.query[:-1])
                 elif isinstance(key, str) and key.isprintable():

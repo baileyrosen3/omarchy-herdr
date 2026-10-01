@@ -2,13 +2,35 @@
 
 ## Unreleased
 
-- Add focused shortcuts for tabs (Super+T), workspaces (Super+Shift+T),
-  workspace and pane pickers (Super+P / Super+Shift+P), settings (Super+,),
-  waiting agents (Super+Shift+A), and editor/file popups (Super+Shift+N / F).
-- Show the new shortcuts throughout the control menu and Super-key profile.
-- Register these chords even when Omarchy has no desktop binding for them,
-  preserving existing desktop actions and passing unassigned chords through
-  outside Herdr.
+- Package a real Omarchy service plugin for standard add/update/remove commands.
+  Manage the Herdr plugin and shortcut bridge through a private runtime copy,
+  preserve developer-linked installations, and keep cleanup available after
+  Omarchy removes its managed checkout.
+- Replace desktop shortcut overrides with dedicated, focused Super+Alt commands.
+  Refuse conflicts instead of replacing Omarchy or personal bindings, and report
+  the actual installed and active integration state.
+- Require Herdr 0.9.3+ for verified pane swapping and layout operations.
+- Toggle the control menu with Super+Alt+M. Add direct splits, swaps, nearest-split
+  rotation, zoom, pane cycling, tab/workspace navigation, and agent/tool launchers.
+- Keep native Ctrl+Alt directional pane focus strict: reaching a pane edge does
+  not switch tabs or workspaces. Preserve native Ctrl+Alt+Shift resizing and the
+  Super+Ctrl+Enter Herdr launcher.
+- Cycle agents in a stable priority sweep: blocked, done, working, then idle.
+  Super+Alt+Q advances and Shift+Q reverses it.
+- Close idle shells directly; confirm running or unknown work before closing a
+  pane, tab, or workspace, using the same policy for menu and shortcut actions.
+- Update shortcut hints, installation instructions, the banner, and manual checks
+  to describe the dedicated profile.
+- Simplify Home into a grouped quick reference for all 26 direct shortcuts,
+  with explicit Shift combinations and live availability instead of repeated
+  action descriptions.
+- Offer an optional first-menu walkthrough or Herdr Key Quest learning game.
+  Keep the game in a practice workspace, check safe live exercises against
+  Herdr state, and teach destructive actions through questions.
+- Add previewable update and removal scripts. Preserve disabled desktop profiles,
+  personal configuration, backups, and practice workspaces.
+- Preserve split orientation, terminal identities, running processes, and zoom
+  when rotating a zoomed pane.
 
 ## 0.1.0 — Initial public preview
 
@@ -24,6 +46,5 @@
 - Official upstream logo shapes converted into bundled terminal art.
 - CLI commands, reversible desktop setup, and manual verification documentation.
 
-Developed against Herdr 0.9.0 and Omarchy's Lua Hyprland configuration. The latest
-UI changes have syntax/import checks; live verification remains documented in
-the manual guide.
+Developed against Herdr 0.9.3 and Omarchy's Lua Hyprland configuration. Use the
+manual guide to verify desktop routing and interaction on your terminal.

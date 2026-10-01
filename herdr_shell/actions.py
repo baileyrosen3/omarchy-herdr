@@ -7,6 +7,9 @@ import shlex
 import shutil
 
 from . import PLUGIN_ID, VERSION
+from .closing import CLOSE_ACTIONS, close_plan, execute_close
+from .navigation import cycle_agent, cycle_pane
+from .rotation import rotate_pane, rotation_unavailable
 from .runtime import ShellError
 
 
@@ -32,12 +35,19 @@ ACTIONS = [
     Action("menu", "Open Herdr Shell", "Configure", description="Search all actions"),
     Action("keybindings", "Edit keybindings", "Configure", description="Search, change, disable and undo shortcuts"),
     Action("settings", "Edit settings", "Configure", description="Appearance, pane behavior and notifications"),
-    Action("desktop-setup", "Set up Omarchy controls", "Configure", description="Preview focused Super-key controls and enable them"),
+    Action("desktop-setup", "Set up Herdr shortcuts", "Configure", description="Preview dedicated Herdr shortcuts and check desktop conflicts"),
+    Action("welcome", "Welcome / learn Herdr", "Configure", description="Choose the walkthrough, learning game, or control menu"),
+    Action("walkthrough", "Learn: guided walkthrough", "Configure", description="Learn the shortcuts and features step by step"),
+    Action("learn-game", "Learn: play Key Quest", "Launch", description="Practice shortcuts in a separate Herdr workspace"),
     Action("workspace-picker", "Switch workspace", "Navigate", "workspace_picker"),
     Action("tab-picker", "Switch tab", "Navigate"),
     Action("pane-picker", "Switch pane", "Navigate"),
     Action("pane-workspace-picker", "Move pane to workspace", "Arrange", description="Move this running pane into another workspace"),
     Action("agent-next-waiting", "Next waiting agent", "Navigate", description="Focus an agent that needs input"),
+    Action("agent-cycle-next", "Next agent by priority", "Navigate", description="Cycle needs input, done, working, then idle agents without reordering mid-cycle"),
+    Action("agent-cycle-previous", "Previous agent by priority", "Navigate", description="Cycle backward through the same stable agent order"),
+    Action("pane-cycle-next", "Next pane in tab", "Navigate", "cycle_pane_next"),
+    Action("pane-cycle-previous", "Previous pane in tab", "Navigate", "cycle_pane_previous"),
     Action("workspace-previous", "Previous workspace", "Navigate", "previous_workspace"),
     Action("workspace-next", "Next workspace", "Navigate", "next_workspace"),
     Action("tab-previous", "Previous tab", "Navigate", "previous_tab"),
@@ -53,7 +63,10 @@ ACTIONS = [
     Action("pane-split-up", "Split pane above", "Arrange"),
     Action("pane-split-left", "Split pane left", "Arrange"),
     Action("pane-zoom", "Toggle pane zoom", "Arrange", "zoom"),
-    Action("pane-close", "Close pane", "Arrange", "close_pane", "Close the selected pane and its process", True),
+    Action("pane-rotate", "Rotate two-pane split", "Arrange", description="Toggle the nearest two-pane sibling split between columns and rows, preserving running processes and its ratio"),
+    Action("pane-close", "Close pane", "Arrange", description="Close this pane; ask first if it has an agent, running command, or unverified activity"),
+    Action("tab-close", "Close tab", "Arrange", description="Close this tab and its panes; ask first if any have activity"),
+    Action("workspace-close", "Close workspace", "Arrange", description="Close this workspace and its tabs; ask first if any panes have activity"),
     Action("theme-terminal", "Use terminal colors", "Configure", description="Follow the outer terminal's palette"),
     Action("config-reload", "Reload configuration", "Configure", "reload_config"),
     Action("config-undo", "Undo last configuration change", "Configure"),
@@ -106,12 +119,13 @@ def catalog_rows(key_rows=()):
     return result
 
 
-def open_ui(context, page="menu"):
+def open_ui(context, page="menu", *, env=None):
+    from . import desktop
     context.validate()
     require_active(context)
     return context.client.call("plugin.pane.open", plugin_id=PLUGIN_ID, entrypoint="menu",
                                placement="popup", width="86%", height="82%",
-                               cwd=context.cwd, env={"HERDR_SHELL_CONTEXT": context.encode(),
+                               cwd=context.cwd, env={**(env or {}), **desktop.popup_environment(), "HERDR_SHELL_CONTEXT": context.encode(),
                                                      "HERDR_SHELL_PAGE": page}, focus=True)
 
 
@@ -130,7 +144,17 @@ def execute(action_id, context, *, yes=False):
         raise ShellError(f"{action.label} requires confirmation. Pass --yes for pane {context.pane}.")
     context.validate()
     client = context.client
-    if action_id in ("menu", "keybindings", "settings", "desktop-setup", "workspace-picker", "tab-picker", "pane-picker", "pane-workspace-picker"):
+    if action_id in CLOSE_ACTIONS:
+        plan = close_plan(action_id, context)
+        if plan["needs_confirmation"] and not yes:
+            return open_ui(context, "confirm-" + action_id, env={"HERDR_SHELL_CLOSE_PLAN": json.dumps(plan)})
+        if yes:
+            plan["confirmed"] = True
+        return execute_close(plan, context)
+    if action_id == "learn-game":
+        from .trainer import open_game
+        return open_game(context)
+    if action_id in ("menu", "welcome", "walkthrough", "keybindings", "settings", "desktop-setup", "workspace-picker", "tab-picker", "pane-picker", "pane-workspace-picker"):
         return open_ui(context, action_id)
     if action_id == "agent-new":
         if not shutil.which("omarchy"):
@@ -143,7 +167,13 @@ def execute(action_id, context, *, yes=False):
     if action_id.startswith("pane-focus-"):
         return client.call("pane.focus_direction", pane_id=context.pane, direction=action_id.removeprefix("pane-focus-"))
     if action_id.startswith("pane-swap-"):
-        return client.call("pane.swap", source_pane_id=context.pane, direction=action_id.removeprefix("pane-swap-"))
+        return client.call("pane.swap", pane_id=context.pane, direction=action_id.removeprefix("pane-swap-"))
+    if action_id == "pane-rotate":
+        return rotate_pane(context)
+    if action_id in ("pane-cycle-next", "pane-cycle-previous"):
+        return cycle_pane(context, 1 if action_id.endswith("next") else -1)
+    if action_id in ("agent-cycle-next", "agent-cycle-previous"):
+        return cycle_agent(context, 1 if action_id.endswith("next") else -1)
     if action_id.startswith("navigate-"):
         direction = action_id.removeprefix("navigate-")
         result = client.call("pane.focus_direction", pane_id=context.pane, direction=direction)
@@ -165,14 +195,12 @@ def execute(action_id, context, *, yes=False):
         if direction in ("left", "up"):
             created = result["pane"]["pane_id"]
             swapped = client.call("pane.swap", source_pane_id=created, target_pane_id=context.pane)
-            if not swapped.get("changed"):
+            if not swapped.get("swap", {}).get("changed"):
                 raise ShellError(f"Pane {created} was created {split_direction}, but could not be moved {direction}.")
             client.call("pane.focus", pane_id=created)
         return result
     if action_id == "pane-zoom":
         return client.call("pane.zoom", pane_id=context.pane, mode="toggle")
-    if action_id == "pane-close":
-        return client.call("pane.close", pane_id=context.pane)
     if action_id == "tab-new":
         return client.call("tab.create", workspace_id=context.workspace, cwd=context.cwd, focus=True)
     if action_id == "workspace-new":
@@ -226,10 +254,10 @@ def execute(action_id, context, *, yes=False):
 def manifest():
     lines = ['# Generated by scripts/generate-manifest.py; edit the action catalog.',
              f'id = "{PLUGIN_ID}"', 'name = "Herdr Shell"', f'version = "{VERSION}"',
-             'min_herdr_version = "0.9.0"', 'platforms = ["linux"]',
-             'description = "Search actions, edit keybindings, and manage configuration with undo."']
+             'min_herdr_version = "0.9.3"', 'platforms = ["linux"]',
+             'description = "Direct Omarchy shortcuts, a searchable menu, learning tools, and configuration with undo."']
     for action in ACTIONS:
-        # Closing a pane must go through a confirming menu or explicit CLI flag.
+        # Close actions decide whether confirmation is required from live activity.
         command = ["python3", "bin/herdr-shell", "_confirm", action.id] if action.confirm else [
             "python3", "bin/herdr-shell", "action", "run", action.id]
         if action.id == "config-undo":
@@ -246,4 +274,6 @@ def manifest():
                   'command = ' + json.dumps(["omarchy", "agent", "--inline", "--pick"])])
     lines.extend(["", "[[panes]]", 'id = "git"', 'title = "Lazygit"', 'placement = "split"',
                   'command = ' + json.dumps(["lazygit"])])
+    lines.extend(["", "[[panes]]", 'id = "trainer"', 'title = "Herdr Key Quest"', 'placement = "split"',
+                  'command = ' + json.dumps(["sh", "-c", 'exec python3 "$HERDR_PLUGIN_ROOT/bin/herdr-shell" _learn'])])
     return "\n".join(lines) + "\n"

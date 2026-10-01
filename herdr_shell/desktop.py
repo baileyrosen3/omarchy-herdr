@@ -1,58 +1,69 @@
 """Focused Omarchy controls, explicit process identity, and reversible setup."""
 from dataclasses import dataclass
+from contextlib import contextmanager
 import difflib
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import time
 
-from .actions import execute
+from .actions import execute, open_ui
 from .config import atomic_write
+from .keymap import chord, collisions, key_name, source_positions
 from .runtime import Client, Context, ShellError, state_path
 
 ROOT = Path(__file__).resolve().parents[1]
 BEGIN = "-- BEGIN HERDR SHELL DESKTOP CONTROLS"
 END = "-- END HERDR SHELL DESKTOP CONTROLS"
 MAPPINGS = [
-    ("SUPER + SPACE", "menu", "Herdr Shell menu"),
-    ("SUPER + K", "keybindings", "Herdr keybindings"),
-    ("SUPER + comma", "settings", "Appearance & Settings"),
-    ("SUPER + T", "tab-new", "New tab"),
-    ("SUPER + SHIFT + T", "workspace-new", "New workspace"),
-    ("SUPER + P", "workspace-picker", "Workspace picker"),
-    ("SUPER + SHIFT + P", "pane-picker", "Pane picker"),
-    ("SUPER + A", "agent-new", "New agent pane"),
-    ("SUPER + SHIFT + A", "agent-next-waiting", "Next waiting agent"),
-    ("SUPER + G", "launch-git", "Lazygit in pane directory"),
-    ("SUPER + SHIFT + N", "launch-editor", "Editor in pane directory"),
-    ("SUPER + SHIFT + F", "launch-files", "File browser in pane directory"),
-    ("SUPER + U", "pane-split-up", "New pane above"),
-    ("SUPER + D", "pane-split-down", "New pane below"),
-    ("SUPER + L", "pane-split-left", "New pane left"),
-    ("SUPER + R", "pane-split-right", "New pane right"),
-    ("SUPER + M", "pane-zoom", "Zoom pane"),
-    ("SUPER + X", "pane-close", "Close pane immediately"),
-    ("SUPER + CTRL + LEFT", "tab-previous", "Previous tab"),
-    ("SUPER + CTRL + RIGHT", "tab-next", "Next tab"),
-    ("SUPER + code:20", "pane-resize-left", "Resize left"),
-    ("SUPER + code:21", "pane-resize-right", "Resize right"),
-    ("SUPER + SHIFT + code:20", "pane-resize-up", "Resize up"),
-    ("SUPER + SHIFT + code:21", "pane-resize-down", "Resize down"),
+    ("SUPER + ALT + M", "menu", "Toggle Herdr Shell menu"),
+    ("SUPER + ALT + T", "tab-new", "New tab"),
+    ("SUPER + ALT + W", "tab-close", "Close tab"),
+    ("SUPER + ALT + SHIFT + T", "workspace-new", "New workspace"),
+    ("SUPER + ALT + SHIFT + W", "workspace-close", "Close workspace"),
+    ("SUPER + ALT + A", "agent-new", "New agent pane"),
+    ("SUPER + ALT + Q", "agent-cycle-next", "Next agent by priority"),
+    ("SUPER + ALT + SHIFT + Q", "agent-cycle-previous", "Previous agent by priority"),
+    ("SUPER + ALT + V", "launch-git", "Lazygit in pane directory"),
+    ("SUPER + ALT + Z", "pane-zoom", "Zoom pane"),
+    ("SUPER + ALT + X", "pane-close", "Close pane"),
+    ("SUPER + ALT + J", "pane-rotate", "Rotate nearest two-pane split"),
+    ("SUPER + ALT + P", "pane-cycle-next", "Next pane in this tab"),
+    ("SUPER + ALT + SHIFT + P", "pane-cycle-previous", "Previous pane in this tab"),
+    ("SUPER + ALT + Page_Up", "tab-previous", "Previous tab"),
+    ("SUPER + ALT + Page_Down", "tab-next", "Next tab"),
+    ("SUPER + ALT + SHIFT + Page_Up", "workspace-previous", "Previous workspace"),
+    ("SUPER + ALT + SHIFT + Page_Down", "workspace-next", "Next workspace"),
 ]
-for direction in ("left", "right", "up", "down"):
-    target = "tab" if direction in ("left", "right") else "workspace"
-    MAPPINGS += [("SUPER + " + direction.upper(), "navigate-" + direction, f"Navigate {direction} (pane / {target})"),
-                 ("SUPER + SHIFT + " + direction.upper(), "pane-swap-" + direction, "Swap pane " + direction)]
-for number in range(1, 11):
-    MAPPINGS += [(f"SUPER + code:{number + 9}", f"workspace-number-{number}", f"Workspace {number}"),
-                 (f"SUPER + SHIFT + code:{number + 9}", f"pane-workspace-{number}", f"Move pane to workspace {number}")]
+for direction, key in (("up", "U"), ("down", "D"), ("left", "L"), ("right", "R")):
+    MAPPINGS += [("SUPER + ALT + " + key, "pane-split-" + direction, "New pane " + direction),
+                 ("SUPER + ALT + SHIFT + " + key, "pane-swap-" + direction, "Swap pane " + direction)]
+_profile_cache = {}
 
 
 def preferences_dir():
-    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "herdr-shell"
+    return _desktop_config_home() / "herdr-shell"
+
+
+def _desktop_config_home():
+    return Path(os.environ.get("HERDR_SHELL_DESKTOP_CONFIG_HOME") or
+                os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+
+
+def popup_environment():
+    """Keep compositor preferences separate from the target Herdr config."""
+    try:
+        root = hypr("repl", 'return herdr_shell_bridge and (os.getenv("XDG_CONFIG_HOME") or os.getenv("HOME") .. "/.config")').strip()
+        if not Path(root).is_absolute() or any(ord(char) < 32 or ord(char) == 127 for char in root):
+            return {}
+        return {"HERDR_SHELL_DESKTOP_CONFIG_HOME": root}
+    except (ShellError, OSError, ValueError, subprocess.TimeoutExpired):
+        return {}
 
 
 def enabled():
@@ -65,12 +76,19 @@ def enabled():
 def set_enabled(value):
     if value and not installed():
         raise ShellError("Install the desktop bridge first: herdr-shell desktop install --apply")
+    if value:
+        registration = reconcile()
+        if "skipped" in registration or not registration.get("generation"):
+            raise ShellError("The desktop configuration changed; refresh integration before enabling shortcuts.")
+        if not registration["registered"]:
+            raise ShellError("All Herdr shortcuts are reserved by desktop bindings; the profile remains off.")
     atomic_write(preferences_dir() / "desktop-enabled", "1\n" if value else "0\n")
+    _profile_cache.clear()
     return {"desktop_controls": bool(value)}
 
 
 def hypr_path():
-    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "hypr/hyprland.lua"
+    return _desktop_config_home() / "hypr/hyprland.lua"
 
 
 def installed():
@@ -82,7 +100,8 @@ def installed():
 
 def pretty_key(key, prefix="ctrl+space"):
     names = {"ctrl": "Ctrl", "alt": "Alt", "shift": "Shift", "super": "Super", "return": "Enter",
-             "enter": "Enter", "space": "Space", "esc": "Esc", "minus": "−", "equal": "=", "plus": "+", "comma": ","}
+             "enter": "Enter", "space": "Space", "esc": "Esc", "minus": "−", "equal": "=", "plus": "+", "comma": ",",
+             "page_up": "PageUp", "page_down": "PageDown"}
     def chord(value):
         value = value.strip().lower()
         for code, label in [(20, "minus"), (21, "equal"), *[(n + 9, str(n % 10)) for n in range(1, 11)]]:
@@ -92,11 +111,13 @@ def pretty_key(key, prefix="ctrl+space"):
 
 
 def profile_rows():
-    rows = [{"id": "desktop-enabled", "label": "Omarchy controls", "detail": "On" if enabled() else "Off",
+    effective = effective_bindings()
+    rows = [{"id": "desktop-enabled", "label": "Super+Alt controls", "detail": "On" if enabled() else "Off",
              "scope": "Herdr focused", "kind": "desktop-toggle", "source": "desktop", "keys": []}]
     for key, action, label in MAPPINGS:
         rows.append({"id": "desktop:" + action, "label": label, "detail": pretty_key(key),
-                     "keys": [key], "kind": "desktop-binding", "scope": "Herdr focused", "source": "desktop"})
+                     "action_id": action, "keys": [key], "kind": "desktop-binding", "scope": "Herdr focused",
+                     "source": "desktop", **effective[action]})
     rows += [{"id": "desktop:alt-tab", "label": "Switch desktop windows", "detail": "Alt+Tab",
               "keys": ["alt+tab"], "kind": "desktop-binding", "scope": "Desktop", "source": "desktop"},
              {"id": "desktop:super-tab", "label": "Your desktop Super+Tab action", "detail": "Super+Tab",
@@ -131,19 +152,32 @@ def client_options(argv):
         value = args.pop(0)
         if value == "--session" and args:
             session = args.pop(0)
+            if not session:
+                return None
         elif value.startswith("--session="):
             session = value.split("=", 1)[1]
+            if not session:
+                return None
         elif value == "--remote" and args:
-            args.pop(0)
+            if not args.pop(0):
+                return None
             remote = True
         elif value.startswith("--remote="):
+            if not value.split("=", 1)[1]:
+                return None
             remote = True
         elif value == "--remote-keybindings" and args:
-            args.pop(0)
-        elif value.startswith("--remote-keybindings=") or value == "--handoff":
+            if not args.pop(0):
+                return None
+        elif value.startswith("--remote-keybindings="):
+            if not value.split("=", 1)[1]:
+                return None
+        elif value == "--handoff":
             pass
         elif value == "session" and len(args) == 2 and args[0] == "attach":
             session = args[1]
+            if not session:
+                return None
             args.clear()
         else:
             return None
@@ -202,6 +236,165 @@ def hypr(*argv):
     return result.stdout
 
 
+def binding_snapshot():
+    binds = json.loads(hypr("-j", "binds"))
+    if not isinstance(binds, list):
+        raise ShellError("Hyprland did not return its registered bindings.")
+    default = Path(os.environ.get("OMARCHY_PATH", "/usr/share/omarchy")) / "default/hypr"
+    files = list(default.rglob("*.lua")) + list(hypr_path().parent.glob("*.lua"))
+    positions = source_positions(files)
+    def option(name):
+        return json.loads(hypr("-j", "getoption", "input:" + name)).get("str", "")
+    layout, variant = option("kb_layout") or "us", option("kb_variant")
+    return binds, collisions(MAPPINGS, binds, positions=positions, layout=layout, variant=variant)
+
+
+def effective_bindings(refresh=False):
+    stamp = (str(preferences_dir()), installed(), enabled())
+    if not refresh and _profile_cache.get("stamp") == stamp and time.monotonic() - _profile_cache.get("time", 0) < 1:
+        return _profile_cache["rows"]
+    rows = {}
+    try:
+        binds, occupied = binding_snapshot() if stamp[1] else ([], {})
+        for keys, action, _ in MAPPINGS:
+            mask, name = chord(keys)
+            own = [b for b in binds if b.get("description") == "Herdr Shell: " + action and
+                   b.get("modmask") == mask and key_name(b.get("key", "")) == name and not b.get("submap")]
+            if action in occupied:
+                status, reason = "conflict", "Reserved by " + occupied[action]
+            elif len(own) > 1:
+                status, reason = "conflict", "Duplicate Herdr shortcut registration"
+            elif not stamp[1]:
+                status, reason = "unavailable", "Install the Super+Alt bridge to activate this shortcut."
+            elif not stamp[2]:
+                status, reason = "disabled", "Super+Alt controls are off."
+            elif not own:
+                status, reason = "unavailable", "This shortcut is not registered; refresh desktop integration."
+            else:
+                status, reason = "ready", "Active in the focused local Herdr terminal."
+            rows[action] = {"status": status, "reason": reason, "active": status == "ready"}
+    except (ShellError, OSError, ValueError, KeyError) as exc:
+        rows = {action: {"status": "unavailable", "reason": "Cannot inspect active shortcuts: " + str(exc),
+                         "active": False} for _, action, _ in MAPPINGS}
+    _profile_cache.update(stamp=stamp, time=time.monotonic(), rows=rows)
+    return rows
+
+
+def generation():
+    value = hypr("repl", "return herdr_shell_bridge and herdr_shell_bridge.generation").strip()
+    return value if re.fullmatch(r"[a-zA-Z0-9]{1,96}", value) and value != "nil" else None
+
+
+def reconcile(expected=None):
+    """Register only free chords after all Omarchy and personal config has loaded."""
+    prefs = preferences_dir()
+    prefs.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (prefs / "registration.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        current = generation()
+        if not current or expected and expected != current:
+            return {"skipped": "configuration reloaded"}
+        _, occupied = binding_snapshot()
+        allowed = [a for _, a, _ in MAPPINGS if a not in occupied]
+        # The generation guard rejects a reconciliation raced by another reload.
+        flags = "{" + ",".join("[" + json.dumps(a) + "]=true" for a in allowed) + "}"
+        hypr("eval", "if herdr_shell_bridge and herdr_shell_bridge.generation == " + json.dumps(current) +
+             " then herdr_shell_bridge.register(" + flags + ") end")
+        atomic_write(prefs / "binding-status.json", json.dumps({"generation": current, "conflicts": occupied}))
+        _profile_cache.clear()
+        return {"registered": allowed, "conflicts": occupied, "generation": current}
+
+
+def _menu_path(socket):
+    # Popup processes inherit the target session's XDG environment, which may
+    # differ from the compositor worker's. The socket gives both a shared scope.
+    socket = Path(socket).resolve()
+    return socket.parent / ".herdr-shell-menus" / (hashlib.sha256(str(socket).encode()).hexdigest()[:24] + ".json")
+
+
+def menu_running(socket):
+    try:
+        marker = json.loads(_menu_path(socket).read_text())
+        process = read_process(marker["pid"])
+        if process.start == marker["start"] and "_menu" in process.argv and process.state not in ("T", "t", "Z", "X"):
+            return marker
+    except (OSError, ValueError, KeyError, IndexError):
+        pass
+    return None
+
+
+@contextmanager
+def menu_instance(context):
+    path = _menu_path(context.socket)
+    process = read_process(os.getpid())
+    marker = {"pid": process.pid, "start": process.start, "pane": context.pane, "terminal": context.terminal}
+    atomic_write(path, json.dumps(marker))
+    try:
+        yield
+    finally:
+        try:
+            if json.loads(path.read_text()) == marker:
+                path.unlink()
+        except (FileNotFoundError, ValueError):
+            pass
+
+
+def toggle_menu(context):
+    if menu_running(context.socket):
+        return context.client.call("popup.close")
+    result = open_ui(context, "menu")
+    # Wait for popup ownership to be recorded before the next queued press.
+    for _ in range(50):
+        if menu_running(context.socket):
+            return result
+        time.sleep(.02)
+    raise ShellError("The menu did not start. Check Herdr Shell logs before retrying.")
+
+
+def record_error(action, exc):
+    state_path().mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (state_path() / "actions.log").open("a") as log:
+        log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} desktop {action}: {exc}\n")
+    if shutil.which("notify-send"):
+        subprocess.run(["notify-send", "Herdr Shell", str(exc)], timeout=3, check=False)
+
+
+def drain(expected):
+    if not re.fullmatch(r"[a-zA-Z0-9]{1,96}", expected):
+        raise ShellError("Invalid shortcut queue identity.")
+    prefs = preferences_dir()
+    with (prefs / ("events-" + expected + ".lock")).open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if generation() != expected:
+            return {"skipped": "configuration reloaded"}
+        path = prefs / ("events-" + expected + ".queue")
+        offset_path = prefs / ("events-" + expected + ".offset")
+        try:
+            offset = int(offset_path.read_text())
+        except (FileNotFoundError, ValueError):
+            offset = 0
+        count = 0
+        with path.open("rb") as events:
+            events.seek(offset)
+            while line := events.readline():
+                if not line.endswith(b"\n"):
+                    break
+                if generation() != expected:
+                    break
+                # Consume before dispatch: an interrupted close/toggle is never replayed.
+                atomic_write(offset_path, str(events.tell()))
+                action = "unknown"
+                try:
+                    sequence, action, window, client, start, address = line.decode().strip().split("\t")
+                    if int(sequence) < 1:
+                        raise ValueError("Invalid event order")
+                    route(action, int(window), int(client), start, address)
+                    count += 1
+                except (ShellError, OSError, ValueError, KeyError) as exc:
+                    record_error(action, exc)
+        return {"processed": count}
+
+
 def route(action, window_pid, client_pid, start, address):
     if action not in {a for _, a, _ in MAPPINGS} or not enabled():
         return {"skipped": "disabled or unknown action"}
@@ -226,25 +419,16 @@ def route(action, window_pid, client_pid, start, address):
     current = json.loads(hypr("-j", "activewindow"))
     if current.get("pid") != window_pid or current.get("address") != address:
         return {"skipped": "window focus changed"}
-    if action == "pane-close":
-        return execute(action, context, yes=True)
-    if action.startswith(("workspace-number-", "pane-workspace-")):
-        number = int(action.rsplit("-", 1)[1])
-        target = next((w for w in snapshot["workspaces"] if w.get("number") == number), None)
-        if not target:
-            raise ShellError(f"Herdr workspace {number} does not exist. Create it from the menu first.")
-        if action.startswith("workspace-number-"):
-            return client.call("workspace.focus", workspace_id=target["workspace_id"])
-        if target["workspace_id"] == context.workspace:
-            return {"changed": False}
-        return client.call("pane.move", pane_id=context.pane, focus=True,
-                           destination={"type": "tab", "tab_id": target["active_tab_id"], "split": "right"})
+    if action == "menu":
+        return toggle_menu(context)
+    if menu_running(context.socket):
+        return {"skipped": "close the menu or confirmation before using action shortcuts"}
     return execute(action, context)
 
 
 def integration_text():
     lua = (ROOT / "integrations/hyprland.lua").read_text()
-    mapping = "\n".join("  [" + json.dumps(key) + "] = {" + json.dumps(action) + ", " + json.dumps(label) + "},"
+    mapping = "\n".join("  { keys=" + json.dumps(key) + ", action=" + json.dumps(action) + ", label=" + json.dumps(label) + " },"
                         for key, action, label in MAPPINGS)
     return lua.replace("-- GENERATED MAPPINGS", mapping)
 
@@ -254,30 +438,31 @@ def install_proposal(remove=False):
     if not path.exists():
         raise ShellError("This setup needs Omarchy's Lua Hyprland config at " + str(path))
     before = path.read_text()
-    pattern = re.compile(re.escape(BEGIN) + r"\n.*?" + re.escape(END) + r"\n?", re.S)
+    pattern = re.compile(r"\n" + re.escape(BEGIN) + r" \(added separator\)\n.*?" + re.escape(END) +
+                         r"\n?|" + re.escape(BEGIN) + r"\n.*?" + re.escape(END) + r"\n?", re.S)
     after = pattern.sub("", before)
     if not remove:
         anchor = 'require("default.hypr.omarchy")'
         if after.count(anchor) != 1:
             raise ShellError("Cannot identify Omarchy's default binding loader. No configuration was changed.")
-        # Load before defaults and personal bindings, retaining each original
-        # dispatcher as a fallback rather than copying package defaults.
+        # Declare the bridge last; asynchronous reconciliation sees all bindings.
         loader = preferences_dir() / "hyprland.lua"
-        block = BEGIN + "\n" + 'dofile(' + json.dumps(str(loader)) + ')\n' + END + "\n"
-        after = after.replace(anchor, block + anchor)
+        separator = bool(after and not after.endswith("\n"))
+        block = BEGIN + (" (added separator)" if separator else "") + "\n" + 'dofile(' + json.dumps(str(loader)) + ')\n' + END + "\n"
+        after += ("\n" if separator else "") + block
     return {"path": str(path), "before": before, "after": after,
             "diff": "".join(difflib.unified_diff(before.splitlines(True), after.splitlines(True),
                                                fromfile=str(path), tofile=str(path) + " (proposed)"))}
 
 
-def install_desktop(proposal, remove=False):
+def install_desktop(proposal, remove=False, *, activate=True):
     state_path().mkdir(parents=True, exist_ok=True, mode=0o700)
     with (state_path() / "desktop.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        return _install_desktop(proposal, remove)
+        return _install_desktop(proposal, remove, activate=activate)
 
 
-def _install_desktop(proposal, remove=False):
+def _install_desktop(proposal, remove=False, *, activate=True):
     path = Path(proposal["path"])
     if path.read_text() != proposal["before"]:
         raise ShellError("Hyprland config changed since the preview; review it again.")
@@ -291,7 +476,7 @@ def _install_desktop(proposal, remove=False):
     atomic_write(history / (str(time.time_ns()) + ".lua"), proposal["before"])
     baseline = hypr("configerrors").strip()
     saved = {name: (prefs / name).read_text() if (prefs / name).exists() else None
-             for name in ("hyprland.lua", "plugin-root", "desktop-enabled")}
+             for name in ("hyprland.lua", "plugin-root", "desktop-enabled", "binding-status.json")}
     mode = path.stat().st_mode & 0o777
     try:
         atomic_write(prefs / "desktop-enabled", "0\n")
@@ -305,8 +490,30 @@ def _install_desktop(proposal, remove=False):
         errors = hypr("configerrors").strip()
         if errors and errors != baseline:
             raise ShellError(errors)
+        registration = {}
         if not remove:
-            atomic_write(prefs / "desktop-enabled", "1\n")
+            registration = reconcile()
+            if "skipped" in registration or not registration.get("generation"):
+                raise ShellError("The desktop bridge was not registered after reload. No shortcut profile was enabled.")
+            atomic_write(prefs / "desktop-enabled", "1\n" if activate and registration["registered"] else "0\n")
+            actual = effective_bindings(refresh=True)
+            if activate:
+                missing = [a for a in registration["registered"] if not actual[a]["active"]]
+            else:
+                # An off preference does not prove that its chords registered.
+                # Inspect ownership directly without briefly enabling the profile.
+                binds, occupied = binding_snapshot()
+                mapping = {a: keys for keys, a, _ in MAPPINGS}
+                missing = []
+                for action in registration["registered"]:
+                    mask, name = chord(mapping[action])
+                    own = [b for b in binds if b.get("description") == "Herdr Shell: " + action and
+                           b.get("modmask") == mask and key_name(b.get("key", "")) == name and not b.get("submap")]
+                    if action in occupied or len(own) != 1:
+                        missing.append(action)
+            if missing:
+                raise ShellError("Cannot verify new shortcut registration: " + ", ".join(missing))
+        _profile_cache.clear()
     except Exception:
         for name, value in saved.items():
             if value is None:
@@ -317,4 +524,5 @@ def _install_desktop(proposal, remove=False):
             atomic_write(path, proposal["before"], mode)
             hypr("reload")
         raise
-    return {"installed": not remove, "enabled": not remove, "config": str(path)}
+    return {"installed": not remove, "enabled": enabled(), "config": str(path),
+            "conflicts": registration.get("conflicts", {})}
