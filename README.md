@@ -132,12 +132,13 @@ herdr-shell logs
 Use Omarchy's normal plugin commands from any terminal:
 
 ```sh
-omarchy plugin update blr.herdr-shell
+omarchy plugin update blr.herdr-shell --yes
 omarchy plugin remove blr.herdr-shell
 omarchy plugin disable blr.herdr-shell     # Pause the companion
 omarchy plugin enable blr.herdr-shell      # Resume it
 ```
 
+`--yes` applies the update directly, skipping the diff preview and confirmation.
 The companion refreshes Herdr after Omarchy updates the package, preserving
 custom fallback keys, your theme, and a disabled shortcut profile. Reopen the
 menu to load new code. A private runtime copy keeps cleanup available after
