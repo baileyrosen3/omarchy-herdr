@@ -302,9 +302,20 @@ class ConfigStore:
         return result
 
 
-def shortcut_changes(menu_key="prefix+space", bindings_key="prefix+alt+k", *, existing=None):
+def shortcut_changes(menu_key="prefix+space", bindings_key="prefix+alt+k", *, existing=None, reserved=None):
+    """Add recovery actions, preserving occupied keys during installation.
+
+    Supplying ``existing`` selects install/update behavior: keep existing Herdr
+    Shell commands and leave a new action unbound if its requested key has a
+    normal-mode owner. ``reserved`` optionally collects those decisions as a list
+    of reports or a dictionary keyed by action. An explicit config apply omits
+    ``existing`` and still relies on strict ConfigStore collision validation.
+    """
+    if reserved is not None and not isinstance(reserved, (list, dict)):
+        raise TypeError("Reserved recovery shortcuts need a list or dictionary.")
     changes = []
     commands = tomllib.loads(existing).get("keys", {}).get("command", []) if existing is not None else []
+    occupied = [row for row in bindings(existing) if row["mode"] == "normal"] if existing is not None else []
     for action, key, label in [("menu", menu_key, "Herdr Shell menu"),
                                ("keybindings", bindings_key, "Herdr Shell keybindings")]:
         # Reinstall/update keeps a user's changed, alternative, or disabled
@@ -312,6 +323,23 @@ def shortcut_changes(menu_key="prefix+space", bindings_key="prefix+alt+k", *, ex
         if any(command.get("type") == "plugin_action" and command.get("command") == f"{PLUGIN_ID}.{action}"
                for command in commands):
             continue
+        requested = set().union(*(normalized(chord) for chord in values(key)))
+        owners = {row["id"]: {field: row[field] for field in ("id", "label", "source", "keys")}
+                  for row in occupied
+                  if any(requested & normalized(chord) for chord in row["keys"])}
+        if owners:
+            ordered = [owners[owner] for owner in sorted(owners)]
+            report = {"action": action, "action_id": f"{PLUGIN_ID}.{action}", "key": key,
+                      "owners": ordered,
+                      "reason": "Reserved by " + ", ".join(owner["label"] for owner in ordered) + "; installed unbound."}
+            if isinstance(reserved, list):
+                reserved.append(report)
+            elif isinstance(reserved, dict):
+                reserved[action] = report
+            key = ""
         item = {"key": key, "type": "plugin_action", "command": f"{PLUGIN_ID}.{action}", "description": label}
         changes.append((["keys", "command", "@" + command_id(item)], item))
+        if existing is not None:
+            occupied.append({"id": "custom:" + command_id(item), "label": label, "source": "custom",
+                             "keys": values(key), "mode": "normal"})
     return changes

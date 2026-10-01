@@ -37,10 +37,13 @@ installation until you remove its integration. See [Contributing](CONTRIBUTING.m
 for the checkout-based development workflow.
 
 **Super+Alt+M** opens/closes the menu. Existing **Super+Ctrl+Enter** still opens
-Herdr, and **Super+Space** keeps the Omarchy menu. Occupied chords remain reserved;
-the menu reports which shortcuts are ready. Native recovery uses your Herdr prefix,
+Herdr, and **Super+Space** keeps the Omarchy menu. An occupied chord stays with its
+owner; all other free shortcuts still install. The menu reports which are ready.
+Native recovery uses your Herdr prefix,
 then **Space** for the menu or **Alt+K** for keybindings. With Omarchy's Ctrl+Space
-prefix, press it, release, then press Space.
+prefix, press it, release, then press Space. If a recovery key is already used,
+that menu action installs unbound; use `herdr-shell menu` or choose a free key in
+Herdr's keybinding settings. Your existing custom recovery keys are preserved.
 Outside Herdr, or with the profile off, its chords pass through to the focused app.
 
 ## All 26 direct shortcuts
@@ -152,9 +155,9 @@ omarchy plugin enable blr.herdr-shell      # Resume it
 ```
 
 `--yes` applies the update directly, skipping the diff preview and confirmation.
-The companion refreshes Herdr after Omarchy updates the package, preserving
-custom fallback keys, your theme, and a disabled shortcut profile. Reopen the
-menu to load new code. A private runtime copy keeps cleanup available after
+The companion refreshes Herdr and rechecks shortcut conflicts after each update,
+preserving custom fallback keys, your theme, and a disabled shortcut profile.
+Reopen the menu to load new code. A private runtime copy keeps cleanup available after
 Omarchy removes its checkout. Cleanup removes this plugin's integration;
 personal settings, caches/history, and practice workspaces remain.
 

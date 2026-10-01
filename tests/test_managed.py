@@ -134,6 +134,28 @@ class ManagedTests(unittest.TestCase):
         self.assertTrue(self.desktop.enabled())
         self.reload.assert_called_once()
 
+    def test_first_install_with_reserved_native_recovery_still_installs_desktop(self):
+        before = BASE.replace('prefix="ctrl+space"', 'prefix="ctrl+space"\nzoom="prefix+space"')
+        self.path.write_text(before)
+        result = self.install()
+        self.assertTrue(self.desktop.installed())
+        self.assertTrue(self.desktop.enabled())
+        self.assertEqual(self.desktop_calls, [("install", True)])
+        self.assertTrue(self.helper.is_symlink())
+        self.assertEqual(self.native.plugins[0]["plugin_root"], str(self.root))
+        doc = tomllib.loads(self.path.read_text())
+        self.assertEqual(doc["keys"]["zoom"], "prefix+space")
+        self.assertFalse(doc["ui"]["pane_gaps"])
+        self.assertIn("# Keep my preferences", self.path.read_text())
+        commands = {command["command"]: command for command in doc["keys"]["command"]}
+        self.assertEqual(commands["other.plugin.menu"]["key"], "prefix+o")
+        self.assertEqual(commands["blr.herdr-shell.menu"]["key"], "")
+        self.assertEqual(commands["blr.herdr-shell.keybindings"]["key"], "prefix+alt+k")
+        self.assertEqual(result["reserved_shortcuts"][0]["action"], "menu")
+        self.assertEqual(result["reserved_shortcuts"][0]["owners"][0]["id"], "zoom")
+        self.assertEqual(config.conflicts(self.path.read_text()), config.conflicts(before))
+        self.reload.assert_called_once()
+
     def test_unchanged_activation_is_noop_including_receipt(self):
         self.install()
         receipt = managed._state() / "setup.json"
@@ -144,6 +166,52 @@ class ManagedTests(unittest.TestCase):
         self.assertEqual(self.desktop_calls, [])
         self.assertTrue(all(c[0] == "list" for c in self.native.calls))
         self.reload.assert_not_called()
+
+    def test_python_update_refreshes_active_desktop_with_unchanged_lua(self):
+        runtime_python = self.root / "herdr_shell/config.py"
+        runtime_python.parent.mkdir()
+        runtime_python.write_text("# original conflict checker\n")
+        self.install()
+        before_config = self.path.read_text()
+        before_loader = (self.prefs / "hyprland.lua").read_text()
+        before_hypr = self.hypr.read_text()
+        self.native.calls.clear()
+        self.desktop_calls.clear()
+        self.reload.reset_mock()
+
+        runtime_python.write_text("# updated conflict checker\n")
+        result = managed.activate()
+
+        self.assertTrue(result["native_changed"])
+        self.assertTrue(result["desktop_changed"])
+        self.assertEqual(self.desktop_calls, [("install", True)])
+        self.assertTrue(self.desktop.enabled())
+        self.assertTrue(self.native.plugins[0]["enabled"])
+        self.assertTrue(any(call[0] == "link" for call in self.native.calls))
+        self.assertEqual((self.prefs / "hyprland.lua").read_text(), before_loader)
+        self.assertEqual(self.hypr.read_text(), before_hypr)
+        self.assertEqual(self.path.read_text(), before_config)
+        self.reload.assert_called_once()
+
+    def test_runtime_update_refreshes_disabled_desktop_without_enabling_it(self):
+        self.install()
+        self.set_enabled(False)
+        before_config = self.path.read_text()
+        before_loader = (self.prefs / "hyprland.lua").read_text()
+        self.desktop_calls.clear()
+        self.reload.reset_mock()
+
+        (self.root / "bin/herdr-shell").write_text("updated executable")
+        result = managed.activate()
+
+        self.assertTrue(result["native_changed"])
+        self.assertTrue(result["desktop_changed"])
+        self.assertEqual(self.desktop_calls, [("install", False)])
+        self.assertFalse(self.desktop.enabled())
+        self.assertTrue(self.native.plugins[0]["enabled"])
+        self.assertEqual((self.prefs / "hyprland.lua").read_text(), before_loader)
+        self.assertEqual(self.path.read_text(), before_config)
+        self.reload.assert_called_once()
 
     def test_refresh_preserves_manually_disabled_plugin_profile_and_custom_fallback(self):
         self.install()

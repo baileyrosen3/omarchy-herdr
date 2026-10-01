@@ -299,7 +299,8 @@ def collisions(mappings, registered, *, positions=None, layout="us", variant="")
                 reasons.append(bind.get("description") or "Catch-all shortcut")
                 continue
             candidate = key_name(bind.get("key", ""))
-            physical = {bind["keycode"]} if bind.get("keycode") else positions.get((mask, bind.get("description", "")), set())
+            physical = {bind["keycode"]} if bind.get("keycode") else (
+                positions.get((mask, bind.get("description", "")), set()) if not candidate else set())
             if re.fullmatch(r"CODE:\d+", candidate):
                 physical = {int(candidate[5:])}
                 candidate = ""

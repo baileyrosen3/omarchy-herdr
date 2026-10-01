@@ -89,8 +89,23 @@ class InstallTests(unittest.TestCase):
         args = cli.parser().parse_args(['install'])
         with redirect_stdout(io.StringIO()):
             result = cli.install(args, self.store)
-        self.assertEqual(result, {'preview': True})
+        self.assertEqual(result, {'preview': True, 'reserved_shortcuts': []})
         self.assertEqual(self.path.read_text(), BASE)
+        self.assertFalse(self.helper.exists())
+        self.assertFalse(self.store.state.exists())
+        self.validator.assert_not_called()
+        self.factory.assert_not_called()
+
+    def test_reserved_shortcut_preview_reports_owner_without_side_effects(self):
+        before = BASE.replace('prefix = "ctrl+space"', 'prefix = "ctrl+space"\nzoom = "prefix+space"')
+        self.path.write_text(before)
+        args = cli.parser().parse_args(['install'])
+        with redirect_stdout(io.StringIO()):
+            result = cli.install(args, self.store)
+        self.assertTrue(result['preview'])
+        self.assertEqual(result['reserved_shortcuts'][0]['action'], 'menu')
+        self.assertEqual(result['reserved_shortcuts'][0]['owners'][0]['id'], 'zoom')
+        self.assertEqual(self.path.read_text(), before)
         self.assertFalse(self.helper.exists())
         self.assertFalse(self.store.state.exists())
         self.validator.assert_not_called()
@@ -145,14 +160,23 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(self.path.read_text(), BASE)
         self.assertFalse(self.store.state.exists())
 
-    def test_native_shortcut_collision_is_rejected_before_plugin_api(self):
+    def test_native_shortcut_collision_keeps_owner_and_installs_unbound_recovery(self):
         self.path.write_text(BASE.replace('prefix = "ctrl+space"', 'prefix = "ctrl+space"\nzoom = "prefix+space"'))
         before = self.path.read_text()
-        with self.assertRaisesRegex(ShellError, 'Shortcut collision'):
-            self.install('--session', 'work')
-        self.factory.assert_not_called()
-        self.assertFalse(self.helper.exists())
-        self.assertEqual(self.path.read_text(), before)
+        result = self.install('--session', 'work')
+        self.assertEqual(result['installed'], PLUGIN_ID)
+        self.assertTrue(self.helper.is_symlink())
+        doc = tomllib.loads(self.path.read_text())
+        self.assertEqual(doc['keys']['zoom'], 'prefix+space')
+        self.assertFalse(doc['ui']['pane_gaps'])
+        self.assertIn('# Preserve my settings', self.path.read_text())
+        commands = {command['command']: command for command in doc['keys']['command']}
+        self.assertEqual(commands['blr.herdr-shell.menu']['key'], '')
+        self.assertEqual(commands['blr.herdr-shell.keybindings']['key'], 'prefix+alt+k')
+        self.assertEqual([owner['id'] for owner in result['reserved_shortcuts'][0]['owners']], ['zoom'])
+        self.assertEqual([method for method, _ in self.server.calls],
+                         ['plugin.list', 'plugin.link', 'server.reload_config'])
+        self.assertEqual(config.conflicts(self.path.read_text()), config.conflicts(before))
 
     def test_second_validation_failure_rolls_back_new_link_and_helper(self):
         self.validator.side_effect = [None, ShellError('validation changed')]

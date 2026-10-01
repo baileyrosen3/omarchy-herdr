@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 import subprocess
@@ -10,6 +11,64 @@ from unittest.mock import Mock, patch
 
 from herdr_shell import desktop as d
 from herdr_shell.runtime import ShellError
+
+
+class CompositorFixture:
+    """A mutable bind registry; every command stays inside this test fixture."""
+    def __init__(self, *, foreign=(), late=None, race=False, omit=None, error=None):
+        self.foreign = list(foreign)
+        self.late, self.race, self.omit, self.error = late, race, omit, error
+        self.owned = {}
+        self.serial = 1
+        self.evals = []
+        self.profile_during_registration = []
+
+    @staticmethod
+    def binding(keys, action=None, description=None):
+        mask, name = d.chord(keys)
+        return {"modmask": mask, "key": name, "keycode": 0, "submap": "", "dispatcher": "__lua",
+                "description": description or "Herdr Shell: " + action}
+
+    @property
+    def generation(self):
+        return 'generation' + str(self.serial)
+
+    def call(self, *args):
+        if args == ('configerrors',):
+            return ''
+        if args == ('reload',):
+            self.serial += 1
+            self.owned.clear()
+            return 'ok'
+        if args[0] == 'repl':
+            return self.generation
+        if args == ('-j', 'binds'):
+            self.profile_during_registration.append(d.enabled())
+            return json.dumps([*self.foreign, *self.owned.values()])
+        if args[:2] == ('-j', 'getoption'):
+            return json.dumps({'str': 'us' if args[-1] == 'input:kb_layout' else ''})
+        if args[0] == 'eval':
+            self.profile_during_registration.append(d.enabled())
+            code = args[1]
+            expected = json.loads(re.search(r'generation == ("[^"]+")', code)[1])
+            allowed = set(re.findall(r'\["([^"]+)"\]=true', code))
+            self.evals.append((expected, allowed))
+            if self.error:
+                raise ShellError(self.error)
+            if self.race == 'always' or self.race and len(self.evals) == 1:
+                self.serial += 1
+                self.owned.clear()
+            if expected != self.generation:
+                return ''
+            # Only the bridge's own handles can be removed by register().
+            self.owned = {action: row for action, row in self.owned.items() if action in allowed}
+            for keys, action, _ in d.MAPPINGS:
+                if action in allowed and action != self.omit:
+                    self.owned.setdefault(action, self.binding(keys, action))
+            if self.late is not None and len(self.evals) == 1:
+                self.foreign.append(self.late)
+            return ''
+        raise AssertionError('Unexpected mocked compositor command: ' + repr(args))
 
 
 class DesktopTests(unittest.TestCase):
@@ -28,9 +87,6 @@ class DesktopTests(unittest.TestCase):
 
     def registration(self):
         return patch.object(d, "reconcile", return_value={"generation": "testgen", "registered": ["pane-zoom"], "conflicts": {}})
-
-    def active_bindings(self):
-        return patch.object(d, "effective_bindings", return_value={"pane-zoom": {"active": True}})
 
     def process(self, pid, argv, children=(), foreground=True, state="S", env=b""):
         base = self.proc / str(pid)
@@ -90,7 +146,7 @@ class DesktopTests(unittest.TestCase):
 
     def test_install_remove_preserve_user_config(self):
         before = d.hypr_path().read_text()
-        with patch.object(d, "hypr", return_value=""), self.registration(), self.active_bindings():
+        with patch.object(d, "hypr", return_value=""), self.registration():
             d.install_desktop(d.install_proposal())
             self.assertTrue(d.enabled())
             self.assertEqual(d.hypr_path().read_text().count(d.BEGIN), 1)
@@ -101,11 +157,9 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(d.hypr_path().read_text(), before)
 
     def test_refresh_disabled_profile_never_enables_it_and_checks_registration(self):
-        mask, _ = d.chord("SUPER + ALT + Z")
-        binds = [{"description": "Herdr Shell: pane-zoom", "modmask": mask, "key": "Z", "submap": ""}]
-        with patch.object(d, "hypr", return_value=""), self.registration(), \
-             patch.object(d, "effective_bindings", return_value={"pane-zoom": {"active": False, "status": "disabled"}}), \
-             patch.object(d, "binding_snapshot", return_value=(binds, {})), \
+        compositor = CompositorFixture()
+        with patch.object(d, "hypr", side_effect=compositor.call), \
+             patch.object(d, "source_positions", return_value={}), \
              patch.object(d, "atomic_write", wraps=d.atomic_write) as write:
             result = d.install_desktop(d.install_proposal(), activate=False)
         self.assertTrue(result["installed"])
@@ -113,12 +167,13 @@ class DesktopTests(unittest.TestCase):
         flags = [call.args[1] for call in write.call_args_list if Path(call.args[0]).name == "desktop-enabled"]
         self.assertTrue(flags)
         self.assertTrue(all(flag == "0\n" for flag in flags))
+        self.assertEqual(len(compositor.owned), 26)
+        self.assertTrue(all(not flag for flag in compositor.profile_during_registration))
 
     def test_disabled_status_does_not_hide_missing_registration_during_refresh(self):
         before = d.hypr_path().read_text()
-        with patch.object(d, "hypr", return_value=""), self.registration(), \
-             patch.object(d, "effective_bindings", return_value={"pane-zoom": {"active": False, "status": "disabled"}}), \
-             patch.object(d, "binding_snapshot", return_value=([], {})):
+        compositor = CompositorFixture(omit='pane-zoom')
+        with patch.object(d, "hypr", side_effect=compositor.call), patch.object(d, "source_positions", return_value={}):
             with self.assertRaisesRegex(ShellError, "verify.*pane-zoom"):
                 d.install_desktop(d.install_proposal(), activate=False)
         self.assertEqual(d.hypr_path().read_text(), before)
@@ -127,7 +182,7 @@ class DesktopTests(unittest.TestCase):
     def test_install_remove_preserve_config_without_final_newline(self):
         before = d.hypr_path().read_text().removesuffix("\n")
         d.hypr_path().write_text(before)
-        with patch.object(d, "hypr", return_value=""), self.registration(), self.active_bindings():
+        with patch.object(d, "hypr", return_value=""), self.registration():
             d.install_desktop(d.install_proposal())
             d.install_desktop(d.install_proposal())
             self.assertEqual(d.hypr_path().read_text().count(d.BEGIN), 1)
@@ -135,7 +190,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(d.hypr_path().read_text(), before)
 
     def test_reload_failure_restores_all_integration_files(self):
-        with patch.object(d, "hypr", return_value=""), self.registration(), self.active_bindings():
+        with patch.object(d, "hypr", return_value=""), self.registration():
             d.install_desktop(d.install_proposal())
         old = {p.name: p.read_text() for p in d.preferences_dir().iterdir()}
         before = d.hypr_path().read_text()
@@ -182,7 +237,7 @@ class DesktopTests(unittest.TestCase):
         self.assertTrue(proposal["after"].endswith(d.END + "\n"))
 
     def test_failed_registration_restores_config_and_managed_files(self):
-        with patch.object(d, "hypr", return_value=""), self.registration(), self.active_bindings():
+        with patch.object(d, "hypr", return_value=""), self.registration():
             d.install_desktop(d.install_proposal())
         d.atomic_write(d.preferences_dir() / "binding-status.json", '{"previous": true}')
         before = d.hypr_path().read_text()
@@ -214,8 +269,8 @@ class DesktopTests(unittest.TestCase):
 
     def test_registration_missing_from_live_bindings_rolls_back(self):
         before = d.hypr_path().read_text()
-        with patch.object(d, "hypr", return_value=""), self.registration(), \
-             patch.object(d, "effective_bindings", return_value={"pane-zoom": {"active": False}}):
+        compositor = CompositorFixture(omit='pane-zoom')
+        with patch.object(d, "hypr", side_effect=compositor.call), patch.object(d, "source_positions", return_value={}):
             with self.assertRaisesRegex(ShellError, "verify.*pane-zoom"):
                 d.install_desktop(d.install_proposal())
         self.assertEqual(d.hypr_path().read_text(), before)
@@ -231,10 +286,109 @@ class DesktopTests(unittest.TestCase):
         self.assertFalse(result["enabled"])
         self.assertEqual(result["conflicts"], conflicts)
 
+    def test_installer_preserves_unrelated_plugin_b_and_registers_all26(self):
+        plugin = CompositorFixture.binding('SUPER+ALT+B', description='External plugin B')
+        compositor = CompositorFixture(foreign=[plugin])
+        positions = {(72, 'External plugin B'): {58}}
+        with patch.object(d, 'hypr', side_effect=compositor.call), patch.object(d, 'source_positions', return_value=positions):
+            result = d.install_desktop(d.install_proposal())
+            self.assertTrue(result['enabled'])
+            self.assertEqual(result['conflicts'], {})
+            self.assertEqual(len(compositor.owned), 26)
+            self.assertTrue(all(not flag for flag in compositor.profile_during_registration))
+            self.assertIs(compositor.foreign[0], plugin)
+            self.assertTrue(all(row['active'] for row in d.effective_bindings(refresh=True).values()))
+
+    def test_installer_skips_true_conflict_and_keeps25_free_chords(self):
+        plugin = CompositorFixture.binding('SUPER+ALT+Z', description='External plugin zoom')
+        compositor = CompositorFixture(foreign=[plugin])
+        with patch.object(d, 'hypr', side_effect=compositor.call), patch.object(d, 'source_positions', return_value={}):
+            result = d.install_desktop(d.install_proposal())
+            self.assertTrue(result['enabled'])
+            self.assertEqual(result['conflicts'], {'pane-zoom': 'External plugin zoom'})
+            self.assertEqual(len(compositor.owned), 25)
+            self.assertNotIn('pane-zoom', compositor.owned)
+            self.assertIs(compositor.foreign[0], plugin)
+            self.assertTrue(all(not flag for flag in compositor.profile_during_registration))
+            rows = d.effective_bindings(refresh=True)
+            self.assertEqual(sum(row['active'] for row in rows.values()), 25)
+            self.assertEqual(rows['pane-zoom']['status'], 'conflict')
+
+    def test_late_conflict_reconciles25_without_rolling_back_or_removing_foreign_handle(self):
+        plugin = CompositorFixture.binding('SUPER+ALT+Z', description='Late plugin zoom')
+        compositor = CompositorFixture(late=plugin)
+        with patch.object(d, 'hypr', side_effect=compositor.call), patch.object(d, 'source_positions', return_value={}):
+            result = d.install_desktop(d.install_proposal())
+        self.assertTrue(result['installed'])
+        self.assertTrue(result['enabled'])
+        self.assertEqual(result['conflicts'], {'pane-zoom': 'Late plugin zoom'})
+        self.assertEqual(len(compositor.owned), 25)
+        self.assertIn('pane-zoom', compositor.evals[0][1])
+        self.assertNotIn('pane-zoom', compositor.evals[1][1])
+        self.assertIs(compositor.foreign[0], plugin)
+        self.assertTrue(d.installed())
+        self.assertTrue(all(not flag for flag in compositor.profile_during_registration))
+
+    def test_generation_race_retries_and_never_persists_stale_success(self):
+        compositor = CompositorFixture(race=True)
+        with patch.object(d, 'hypr', side_effect=compositor.call), patch.object(d, 'source_positions', return_value={}), \
+             patch.object(d, 'atomic_write', wraps=d.atomic_write) as write:
+            result = d.install_desktop(d.install_proposal())
+        self.assertTrue(result['enabled'])
+        self.assertEqual(len(compositor.owned), 26)
+        self.assertEqual(len(compositor.evals), 2)
+        self.assertNotEqual(compositor.evals[0][0], compositor.evals[1][0])
+        saved = [json.loads(call.args[1]) for call in write.call_args_list if Path(call.args[0]).name == 'binding-status.json']
+        self.assertEqual([row['generation'] for row in saved], [compositor.generation])
+        self.assertTrue(all(not flag for flag in compositor.profile_during_registration))
+
+    def test_generation_churn_has_bounded_retries_and_rolls_back(self):
+        before = d.hypr_path().read_text()
+        compositor = CompositorFixture(race='always')
+        with patch.object(d, 'hypr', side_effect=compositor.call), patch.object(d, 'source_positions', return_value={}):
+            with self.assertRaisesRegex(ShellError, 'not registered'):
+                d.install_desktop(d.install_proposal())
+        self.assertEqual(len(compositor.evals), 3)
+        self.assertEqual(d.hypr_path().read_text(), before)
+        self.assertFalse(d.enabled())
+        self.assertFalse((d.preferences_dir() / 'binding-status.json').exists())
+
+    def test_expected_generation_race_skips_without_following_new_configuration(self):
+        compositor = CompositorFixture(race=True)
+        with patch.object(d, 'hypr', side_effect=compositor.call), patch.object(d, 'source_positions', return_value={}):
+            self.assertIn('skipped', d.reconcile(compositor.generation))
+        self.assertEqual(len(compositor.evals), 1)
+        self.assertFalse((d.preferences_dir() / 'binding-status.json').exists())
+
+    def test_lua_registration_error_is_not_retried_or_reported_as_a_conflict(self):
+        before = d.hypr_path().read_text()
+        compositor = CompositorFixture(error='Lua registration failed')
+        with patch.object(d, 'hypr', side_effect=compositor.call), patch.object(d, 'source_positions', return_value={}):
+            with self.assertRaisesRegex(ShellError, 'Lua registration failed'):
+                d.install_desktop(d.install_proposal())
+        self.assertEqual(len(compositor.evals), 1)
+        self.assertEqual(d.hypr_path().read_text(), before)
+        self.assertFalse(d.enabled())
+
+    def test_disabled_refresh_retries_late_conflict_without_ever_enabling(self):
+        plugin = CompositorFixture.binding('SUPER+ALT+Z', description='Late plugin zoom')
+        compositor = CompositorFixture(late=plugin)
+        with patch.object(d, 'hypr', side_effect=compositor.call), patch.object(d, 'source_positions', return_value={}), \
+             patch.object(d, 'atomic_write', wraps=d.atomic_write) as write:
+            result = d.install_desktop(d.install_proposal(), activate=False)
+        self.assertTrue(result['installed'])
+        self.assertFalse(result['enabled'])
+        self.assertEqual(len(compositor.owned), 25)
+        self.assertIs(compositor.foreign[0], plugin)
+        flags = [call.args[1] for call in write.call_args_list if Path(call.args[0]).name == 'desktop-enabled']
+        self.assertTrue(all(flag == '0\n' for flag in flags))
+        self.assertTrue(all(not flag for flag in compositor.profile_during_registration))
+
     def test_reconcile_passes_only_unoccupied_actions_with_generation_guard(self):
         occupied = {"tab-new": "Personal tab shortcut", "pane-zoom": "Personal zoom shortcut"}
+        own = [CompositorFixture.binding(key, action) for key, action, _ in d.MAPPINGS if action not in occupied]
         with patch.object(d, "generation", return_value="testgen"), \
-             patch.object(d, "binding_snapshot", return_value=([], occupied)), patch.object(d, "hypr") as hypr:
+             patch.object(d, "binding_snapshot", side_effect=[([], occupied), (own, occupied)]), patch.object(d, "hypr") as hypr:
             result = d.reconcile("testgen")
         self.assertNotIn("tab-new", result["registered"])
         self.assertNotIn("pane-zoom", result["registered"])

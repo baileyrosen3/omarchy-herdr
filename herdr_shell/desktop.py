@@ -286,23 +286,56 @@ def generation():
 
 
 def reconcile(expected=None):
-    """Register only free chords after all Omarchy and personal config has loaded."""
+    """Register and verify free chords, retrying reloads and newly occupied keys."""
     prefs = preferences_dir()
     prefs.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (prefs / "registration.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        current = generation()
-        if not current or expected and expected != current:
-            return {"skipped": "configuration reloaded"}
-        _, occupied = binding_snapshot()
-        allowed = [a for _, a, _ in MAPPINGS if a not in occupied]
-        # The generation guard rejects a reconciliation raced by another reload.
-        flags = "{" + ",".join("[" + json.dumps(a) + "]=true" for a in allowed) + "}"
-        hypr("eval", "if herdr_shell_bridge and herdr_shell_bridge.generation == " + json.dumps(current) +
-             " then herdr_shell_bridge.register(" + flags + ") end")
-        atomic_write(prefs / "binding-status.json", json.dumps({"generation": current, "conflicts": occupied}))
-        _profile_cache.clear()
-        return {"registered": allowed, "conflicts": occupied, "generation": current}
+        for attempt in range(3):
+            current = generation()
+            if not current or expected and expected != current:
+                if expected:
+                    return {"skipped": "configuration reloaded"}
+                if attempt < 2:
+                    time.sleep(.05)
+                continue
+            _, occupied = binding_snapshot()
+            allowed = [a for _, a, _ in MAPPINGS if a not in occupied]
+            # A reload can make this eval a no-op. Never persist its planned
+            # rows as successful registrations without checking the generation.
+            flags = "{" + ",".join("[" + json.dumps(a) + "]=true" for a in allowed) + "}"
+            hypr("eval", "if herdr_shell_bridge and herdr_shell_bridge.generation == " + json.dumps(current) +
+                 " then herdr_shell_bridge.register(" + flags + ") end")
+            if generation() != current:
+                if expected:
+                    return {"skipped": "configuration reloaded"}
+                continue
+            binds, actual_occupied = binding_snapshot()
+            if generation() != current:
+                if expected:
+                    return {"skipped": "configuration reloaded"}
+                continue
+            actual_allowed = [a for _, a, _ in MAPPINGS if a not in actual_occupied]
+            if actual_allowed != allowed:
+                # register removes only this bridge's handles. A late desktop
+                # owner survives while the other free chords remain available.
+                continue
+            missing = []
+            for keys, action, _ in MAPPINGS:
+                if action not in allowed:
+                    continue
+                mask, name = chord(keys)
+                own = [b for b in binds if b.get("description") == "Herdr Shell: " + action and
+                       b.get("modmask") == mask and key_name(b.get("key", "")) == name and
+                       b.get("dispatcher", "__lua") == "__lua" and not b.get("submap")]
+                if len(own) != 1:
+                    missing.append(action)
+            if missing:
+                raise ShellError("Cannot verify new shortcut registration: " + ", ".join(missing))
+            atomic_write(prefs / "binding-status.json", json.dumps({"generation": current, "conflicts": actual_occupied}))
+            _profile_cache.clear()
+            return {"registered": allowed, "conflicts": actual_occupied, "generation": current}
+        return {"skipped": "desktop shortcut configuration kept changing"}
 
 
 def _menu_path(socket):
@@ -500,24 +533,9 @@ def _install_desktop(proposal, remove=False, *, activate=True):
             registration = reconcile()
             if "skipped" in registration or not registration.get("generation"):
                 raise ShellError("The desktop bridge was not registered after reload. No shortcut profile was enabled.")
+            # reconcile has checked exact live ownership while the profile is
+            # still off, for both activation and a disabled-profile refresh.
             atomic_write(prefs / "desktop-enabled", "1\n" if activate and registration["registered"] else "0\n")
-            actual = effective_bindings(refresh=True)
-            if activate:
-                missing = [a for a in registration["registered"] if not actual[a]["active"]]
-            else:
-                # An off preference does not prove that its chords registered.
-                # Inspect ownership directly without briefly enabling the profile.
-                binds, occupied = binding_snapshot()
-                mapping = {a: keys for keys, a, _ in MAPPINGS}
-                missing = []
-                for action in registration["registered"]:
-                    mask, name = chord(mapping[action])
-                    own = [b for b in binds if b.get("description") == "Herdr Shell: " + action and
-                           b.get("modmask") == mask and key_name(b.get("key", "")) == name and not b.get("submap")]
-                    if action in occupied or len(own) != 1:
-                        missing.append(action)
-            if missing:
-                raise ShellError("Cannot verify new shortcut registration: " + ", ".join(missing))
         _profile_cache.clear()
     except Exception:
         for name, value in saved.items():

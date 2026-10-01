@@ -148,6 +148,25 @@ o.bind("SUPER + code:24", "After loop", {})
             self.assertTrue(self.check('SUPER+ALT+Q', [self.binding(label='Physical action')], positions=positions))
             self.assertFalse(self.check('SUPER+ALT+M', [self.binding(label='Physical action')], positions=positions))
 
+    def test_known_plugin_b_ignores_stale_same_description_source_positions(self):
+        from herdr_shell.desktop import MAPPINGS
+        source = self.source('o.bind("SUPER + ALT + code:58", "Other plugin", "old command")')
+        positions = k.source_positions([source])
+        named = self.binding('B', label='Other plugin')
+        with patch.object(k, 'physical_names', return_value={58: {'M'}, 56: {'B'}}):
+            self.assertEqual(k.collisions(MAPPINGS, [named], positions=positions), {})
+            # A real live physical code still outranks the symbolic field.
+            self.assertIn('menu', k.collisions(MAPPINGS, [{**named, 'keycode': 58}], positions=positions))
+            self.assertEqual(k.collisions(MAPPINGS, [{**named, 'keycode': 56}], positions=positions), {})
+
+    def test_physical_plugin_b_with_blank_json_key_does_not_reserve_other_keys(self):
+        from herdr_shell.desktop import MAPPINGS
+        positions = {(72, 'Other plugin'): {56}}
+        with patch.object(k, 'physical_names', return_value={56: {'B'}}):
+            for bind in (self.binding(code=56, label='Other plugin'), self.binding(label='Other plugin')):
+                with self.subTest(bind=bind):
+                    self.assertEqual(k.collisions(MAPPINGS, [bind], positions=positions), {})
+
     def test_ambiguous_partial_physical_recovery_fails_closed(self):
         with patch.object(k, 'physical_names', return_value={24: {'Q'}, 999: set()}):
             result = self.check('SUPER+ALT+M', [self.binding()], positions={(72, 'Desktop action'): {24, 999}})

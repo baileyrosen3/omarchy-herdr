@@ -108,10 +108,12 @@ Exit welcome. Menu/CLI access must remain available before that unlock.
 
 The opt-in Omarchy probe runs the packaged plugin manager and real offline Herdr
 registration under a temporary HOME/XDG tree. Local Git transport and shell IPC
-are fixtures; desktop binding reads/dispatch are stubbed, while generated bridge
-files and configuration validation use the real plugin code. It checks add,
-update, disable/resume, and removal after source deletion. QML loading and real
-compositor input need the separate QML/desktop checks.
+are fixtures, and a simulated compositor registry supplies binding reads and
+registration. Collision detection, reconciliation, bridge files, and native
+configuration validation use the real plugin code. It checks reserved recovery
+keys, partial desktop conflicts, Python-only updates, disabled profiles,
+disable/resume, and removal after source deletion. QML loading and real compositor
+input need the separate QML/desktop checks.
 
 The opt-in desktop check, `python3 tests/desktop_probe.py`, additionally requires
 `foot`, a running Hyprland session with all 26 profile shortcuts active, and

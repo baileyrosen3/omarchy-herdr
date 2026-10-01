@@ -175,10 +175,11 @@ def install(args, store):
     destination = Path.home() / ".local/bin/herdr-shell"
     source = root / "bin/herdr-shell"
     before = store.read()
-    proposal = store.prepare(shortcut_changes(existing=before), before)
+    reserved_shortcuts = []
+    proposal = store.prepare(shortcut_changes(existing=before, reserved=reserved_shortcuts), before)
     print(f"Plugin: {root}\nCLI: {destination}\n" + proposal["diff"])
     if not args.apply:
-        return {"preview": True}
+        return {"preview": True, "reserved_shortcuts": reserved_shortcuts}
     if destination.exists() or destination.is_symlink():
         if not destination.is_symlink() or destination.resolve() != source:
             raise ShellError(f"{destination} already belongs to another installation.")
@@ -220,7 +221,7 @@ def install(args, store):
         if failures:
             raise ShellError(str(exc) + "; plugin setup rollback failed: " + "; ".join(failures)) from exc
         raise
-    return {"installed": PLUGIN_ID, "cli": str(destination), **result}
+    return {"installed": PLUGIN_ID, "cli": str(destination), "reserved_shortcuts": reserved_shortcuts, **result}
 
 
 def dispatch(args):

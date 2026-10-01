@@ -5,7 +5,7 @@ import tomllib
 import unittest
 from unittest.mock import patch
 
-from herdr_shell.config import ConfigStore, bindings, conflicts, shortcut_changes
+from herdr_shell.config import ConfigStore, bindings, command_id, conflicts, shortcut_changes
 from herdr_shell.runtime import ShellError
 
 
@@ -38,6 +38,96 @@ class ConfigTests(unittest.TestCase):
         self.store.apply(self.store.prepare(shortcut_changes()))
         self.assertFalse(self.store.prepare(shortcut_changes())["changes"])
         self.assertEqual(len(tomllib.loads(self.path.read_text())["keys"]["command"]), 2)
+
+    def recovery(self, before, *, menu_key="prefix+space", bindings_key="prefix+alt+k", reserved=None):
+        self.path.write_text(before)
+        proposal = self.store.prepare(shortcut_changes(menu_key, bindings_key, existing=before, reserved=reserved), before)
+        self.store.apply(proposal)
+        return {command["command"]: command for command in tomllib.loads(self.path.read_text())["keys"]["command"]}, proposal
+
+    def test_install_keeps_occupied_native_key_and_adds_unbound_menu(self):
+        before = BASE.replace('prefix = "ctrl+space"', 'prefix = "ctrl+space"\nzoom = "prefix+space"')
+        report = []
+        commands, proposal = self.recovery(before, reserved=report)
+        self.assertEqual(commands["blr.herdr-shell.menu"]["key"], "")
+        self.assertEqual(commands["blr.herdr-shell.keybindings"]["key"], "prefix+alt+k")
+        self.assertEqual(tomllib.loads(self.path.read_text())["keys"]["zoom"], "prefix+space")
+        self.assertIn('# My hand-written comment', self.path.read_text())
+        self.assertFalse(tomllib.loads(self.path.read_text())["ui"]["pane_gaps"])
+        self.assertEqual(report[0]["action"], "menu")
+        self.assertEqual(report[0]["action_id"], "blr.herdr-shell.menu")
+        self.assertEqual(report[0]["key"], "prefix+space")
+        self.assertEqual([owner["id"] for owner in report[0]["owners"]], ["zoom"])
+        self.assertEqual(report[0]["owners"][0]["source"], "user")
+        self.assertIn("Zoom", report[0]["reason"])
+        self.assertNotIn("Shortcut collision", proposal["diff"])
+
+    def test_install_respects_default_owner_and_normalized_modifier_aliases(self):
+        report = {}
+        commands, _ = self.recovery(BASE, menu_key="PREFIX + L", bindings_key="alt+control+left", reserved=report)
+        self.assertEqual(commands["blr.herdr-shell.menu"]["key"], "")
+        self.assertEqual(commands["blr.herdr-shell.keybindings"]["key"], "")
+        self.assertEqual(report["menu"]["owners"][0]["id"], "focus_pane_right")
+        self.assertEqual(report["menu"]["owners"][0]["source"], "default")
+        self.assertEqual(report["keybindings"]["owners"][0]["id"], "focus_pane_left")
+
+    def test_install_respects_custom_shell_and_plugin_action_owners(self):
+        for command_type in ("shell", "plugin_action"):
+            with self.subTest(command_type=command_type):
+                command = {"key": ["prefix+space", "prefix+f"], "type": command_type,
+                           "command": "other.plugin.menu", "description": "Personal menu"}
+                before = BASE + '\n[[keys.command]]\nkey = ["prefix+space", "prefix+f"]\ntype = "' + command_type + '"\ncommand = "other.plugin.menu"\ndescription = "Personal menu"\n'
+                report = []
+                commands, _ = self.recovery(before, reserved=report)
+                self.assertEqual(commands["other.plugin.menu"], command)
+                self.assertEqual(commands["blr.herdr-shell.menu"]["key"], "")
+                self.assertEqual(report[0]["owners"][0]["id"], "custom:" + command_id(command))
+                self.assertEqual(report[0]["owners"][0]["label"], "Personal menu")
+
+    def test_install_respects_expanded_range_and_legacy_indexed_bindings(self):
+        for before, chord, owner in ((BASE, "prefix+5", "switch_tab"),
+                                     (BASE + '\n[keys.indexed]\nworkspace = "ctrl+alt"\n', "option+control+8", "indexed:workspace")):
+            with self.subTest(chord=chord):
+                report = []
+                commands, _ = self.recovery(before, menu_key=chord, reserved=report)
+                self.assertEqual(commands["blr.herdr-shell.menu"]["key"], "")
+                self.assertEqual(report[0]["owners"][0]["id"], owner)
+
+    def test_install_does_not_reserve_same_key_in_navigation_mode(self):
+        report = []
+        commands, _ = self.recovery(BASE, menu_key="h", reserved=report)
+        self.assertEqual(commands["blr.herdr-shell.menu"]["key"], "h")
+        self.assertEqual(report, [])
+
+    def test_install_preserves_custom_and_disabled_owned_fallbacks_verbatim(self):
+        for key in ('"prefix+f"', '["prefix+f", "prefix+g"]', '""', '[]'):
+            with self.subTest(key=key):
+                before = BASE + '\n[[keys.command]]\nkey = ' + key + '\ntype = "plugin_action"\ncommand = "blr.herdr-shell.menu"\ndescription = "My menu"\n[[keys.command]]\nkey = ""\ntype = "plugin_action"\ncommand = "blr.herdr-shell.keybindings"\ndescription = "My keys"\n'
+                report = []
+                commands, proposal = self.recovery(before, reserved=report)
+                self.assertEqual(proposal["changes"], [])
+                self.assertEqual(self.path.read_text(), before)
+                self.assertEqual(commands["blr.herdr-shell.menu"]["key"], tomllib.loads('key=' + key)["key"])
+                self.assertEqual(report, [])
+
+    def test_install_is_idempotent_after_reservation_and_tracks_both_new_fallbacks(self):
+        report = []
+        commands, _ = self.recovery(BASE, menu_key="prefix+a", bindings_key="prefix+a", reserved=report)
+        self.assertEqual(commands["blr.herdr-shell.menu"]["key"], "prefix+a")
+        self.assertEqual(commands["blr.herdr-shell.keybindings"]["key"], "")
+        self.assertEqual(report[0]["action"], "keybindings")
+        self.assertEqual(report[0]["owners"][0]["label"], "Herdr Shell menu")
+        before = self.path.read_text()
+        commands, proposal = self.recovery(before)
+        self.assertEqual(proposal["changes"], [])
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_explicit_config_apply_still_rejects_occupied_default_recovery_key(self):
+        before = BASE.replace('prefix = "ctrl+space"', 'prefix = "ctrl+space"\nzoom = "prefix+space"')
+        self.path.write_text(before)
+        with self.assertRaisesRegex(ShellError, "Shortcut collision"):
+            self.store.prepare(shortcut_changes())
+        self.assertEqual(self.path.read_text(), before)
 
     def test_collision_with_default_and_expanded_range(self):
         for chord in ("prefix+l", "prefix+5"):

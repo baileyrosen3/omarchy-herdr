@@ -5,7 +5,8 @@ Run: python3 tests/omarchy_probe.py --run [--keep]
 The installed add/update/remove/enable/disable scripts, manifest validator, Git,
 Herdr offline plugin registry, native config validation, bridge file lifecycle,
 and detached supervisor are real. A local Git URL adapter, shell IPC fixture,
-and fixture-only desktop binding inspection replace network/QML/Hyprland effects.
+and a fixture-only compositor registry replace network/QML/Hyprland effects.
+Collision detection, reconciliation and live-generation ownership checks are real.
 QML loading and physical chords belong to the separate desktop probe.
 """
 import argparse
@@ -43,6 +44,16 @@ key="prefix+o"
 type="plugin_action"
 command="qa.unrelated.menu"
 description="Personal command"
+[[keys.command]]
+key="prefix+space"
+type="plugin_action"
+command="qa.unrelated.menu"
+description="Personal menu recovery owner"
+[[keys.command]]
+key="prefix+alt+k"
+type="plugin_action"
+command="qa.unrelated.menu"
+description="Personal keybindings recovery owner"
 '''
 HYPR = '-- Personal desktop settings must survive.\nrequire("default.hypr.omarchy")\n'
 
@@ -93,9 +104,9 @@ else:
 '''
 
 DESKTOP_FIXTURE = r'''"""Only this disposable Git fixture may fake compositor reads/dispatch."""
-import json, os, sys
+import json, os, re, sys
 from pathlib import Path
-from . import desktop, omarchy
+from . import desktop, keymap, omarchy
 from .runtime import ShellError
 
 def install():
@@ -108,24 +119,65 @@ def install():
              "file": str(location)}
     with (root / "processes.jsonl").open("a") as log:
         log.write(json.dumps(event) + "\n")
+    state_path = root / "compositor-state.json"
+    def read_state():
+        if not state_path.exists():
+            return {"generation": None, "reloads": 0, "owned": {}}
+        return json.loads(state_path.read_text())
+    def write_state(state):
+        desktop.atomic_write(state_path, json.dumps(state))
+    def bindings():
+        state = read_state()
+        foreign = json.loads((root / "compositor-foreign.json").read_text())
+        return [*foreign, *state["owned"].values()]
     def hypr(*args):
         with (root / "desktop-ipc.jsonl").open("a") as log:
             log.write(json.dumps(list(args)) + "\n")
-        if args == ("configerrors",) or args == ("reload",) or args[0] == "eval":
+        if args == ("configerrors",):
+            return ""
+        if args == ("reload",):
+            state = read_state()
+            state["reloads"] += 1
+            state["generation"] = "QAfixtureGeneration" + str(state["reloads"]) if desktop.installed() else None
+            state["owned"] = {}
+            write_state(state)
             return ""
         if args[0] == "repl" and "generation" in args[1]:
-            return "QAfixtureGeneration"
-        raise ShellError("Unexpected compositor call in isolated fixture: " + repr(args))
-    def snapshot():
-        rows = []
-        if desktop.installed():
+            return read_state()["generation"] or "nil"
+        if args == ("-j", "binds"):
+            return json.dumps(bindings())
+        if args[:2] == ("-j", "getoption"):
+            return json.dumps({"str": "us" if args[-1] == "input:kb_layout" else ""})
+        if args[0] == "eval":
+            state = read_state()
+            code = args[1]
+            guard = re.search(r'generation == ("[^"]+")', code)
+            if guard is None or "herdr_shell_bridge.register(" not in code:
+                raise ShellError("Unexpected eval in isolated fixture: " + code)
+            expected = json.loads(guard[1])
+            allowed = set(re.findall(r'\["([^"]+)"\]=true', code))
+            known = {action for _, action, _ in desktop.MAPPINGS}
+            if not allowed <= known:
+                raise ShellError("Fixture cannot register unknown actions")
+            with (root / "desktop-registration.jsonl").open("a") as log:
+                log.write(json.dumps({"expected": expected, "generation": state["generation"],
+                                      "allowed": sorted(allowed), "profile_enabled": desktop.enabled(),
+                                      "python_revision": getattr(keymap, "QA_RECONCILE_REVISION", "initial")}) + "\n")
+            if expected != state["generation"]:
+                return ""  # A stale generation cannot claim a new registration.
+            # register() owns only these handles; external bindings survive.
+            state["owned"] = {action: row for action, row in state["owned"].items() if action in allowed}
             for keys, action, _ in desktop.MAPPINGS:
-                mask, name = desktop.chord(keys)
-                rows.append({"modmask": mask, "key": name, "submap": "",
-                             "description": "Herdr Shell: " + action})
-        return rows, {}
+                if action in allowed:
+                    mask, name = desktop.chord(keys)
+                    state["owned"].setdefault(action, {"modmask": mask, "key": name, "keycode": 0,
+                        "submap": "", "dispatcher": "__lua", "description": "Herdr Shell: " + action})
+            write_state(state)
+            return ""
+        raise ShellError("Unexpected compositor call in isolated fixture: " + repr(args))
     desktop.hypr = hypr
-    desktop.binding_snapshot = snapshot
+    # Keep actual binding_snapshot(), collision detection, reconciliation,
+    # generation rechecks, and exact per-action ownership verification.
     # Preserve the stable-observation/retry algorithm while shortening QA waits.
     omarchy.POLL_SECONDS = .15
 '''
@@ -170,6 +222,9 @@ class Probe:
         self.hypr = self.config / "hypr/hyprland.lua"
         self.prefs = self.config / "herdr-shell"
         self.helper = self.home / ".local/bin/herdr-shell"
+        self.compositor = root / "compositor-state.json"
+        self.foreign = [{"modmask": 72, "key": "Z", "keycode": 0, "submap": "", "dispatcher": "exec",
+                         "description": "QA reserved desktop zoom"}]
         self.git = shutil.which("git")
         self.herdr = shutil.which("herdr")
         self.env = {key: value for key, value in os.environ.items()
@@ -228,6 +283,7 @@ class Probe:
             (self.config / name).mkdir(parents=True, exist_ok=True)
         self.native_config.write_text(BASE)
         self.hypr.write_text(HYPR)
+        (self.root / "compositor-foreign.json").write_text(json.dumps(self.foreign))
         shell = self.config / "omarchy/shell.json"
         shell.write_text(json.dumps({"plugins": [OTHER], "disabledPlugins": [], "qaPersonal": {"keep": True}}))
         other = self.config / "omarchy/plugins" / OTHER
@@ -289,8 +345,39 @@ os.execv(%r, [%r, *args])
         require((self.prefs / "plugin-root").read_text().strip() == str(self.runtime), "Bridge owner differs")
         require("BEGIN HERDR SHELL DESKTOP CONTROLS" in self.hypr.read_text(), "Desktop block missing")
         fallback = {c["command"]: c["key"] for c in self.commands() if c["type"] == "plugin_action"}
-        require(fallback.get(PLUGIN + ".menu") == "prefix+space", "Native menu fallback missing")
-        require(fallback.get(PLUGIN + ".keybindings") == "prefix+alt+k", "Native keybindings fallback missing")
+        require(fallback.get(PLUGIN + ".menu") == "", "Reserved native menu fallback must install unbound")
+        require(fallback.get(PLUGIN + ".keybindings") == "", "Reserved native keybindings fallback must install unbound")
+        owners = [c for c in self.commands() if c["command"] == OTHER + ".menu"]
+        require(owners == tomllib.loads(BASE)["keys"]["command"], "Installation changed personal native key owners")
+
+    def check_registered(self, *, active, python_revision="initial"):
+        # Ask the actual runtime CLI to run its real effective-binding checks.
+        status = json.loads(self.run([self.helper, "desktop", "status"]))
+        rows = {r["action_id"]: r for r in status["bindings"] if r.get("action_id")}
+        require(len(rows) == 26, "Desktop status omitted profile actions")
+        require(rows["pane-zoom"]["status"] == "conflict" and not rows["pane-zoom"]["active"]
+                and "QA reserved desktop zoom" in rows["pane-zoom"]["reason"],
+                "Reserved desktop chord was reported active or lost its owner reason")
+        free = set(rows) - {"pane-zoom"}
+        require(all(rows[action]["active"] == active and rows[action]["status"] == ("ready" if active else "disabled")
+                    for action in free), "Free desktop chords did not reflect the actual profile preference")
+        state = read_json(self.compositor)
+        require(set(state["owned"]) == free and len(state["owned"]) == 25,
+                "Compositor fixture registered reserved/missing actions")
+        require(read_json(self.root / "compositor-foreign.json") == self.foreign,
+                "Registration changed an external desktop owner")
+        report = read_json(self.prefs / "binding-status.json")
+        require(report["generation"] == state["generation"] and set(report["conflicts"]) == {"pane-zoom"},
+                "Binding status was persisted without the current live generation/conflict set")
+        registrations = lines(self.root / "desktop-registration.jsonl")
+        require(registrations and set(registrations[-1]["allowed"]) == free
+                and registrations[-1]["expected"] == state["generation"]
+                and registrations[-1]["generation"] == state["generation"],
+                "Live registration did not use the verified generation and exact free set")
+        require(registrations[-1]["profile_enabled"] is False,
+                "Shortcut ownership must be verified before enabling the profile")
+        require(registrations[-1]["python_revision"] == python_revision,
+                "Updated Python conflict checker was not loaded for reconciliation")
 
     def exercise(self):
         self.prepare()
@@ -300,9 +387,15 @@ os.execv(%r, [%r, *args])
         self.start()  # Deliberately stand in for Service.qml's execDetached call.
         first = self.eventually(lambda: self.status("ready"), "Add did not activate native integration")
         self.check_owned()
+        reservations = json.loads(first["result"])["reserved_shortcuts"]
+        require({row["action"] for row in reservations} == {"menu", "keybindings"}
+                and all(row["owners"] and "Reserved by" in row["reason"] for row in reservations),
+                "Managed setup did not report both native fallback reservations")
+        self.check_registered(active=True)
         require(self.native()["enabled"] and (self.prefs / "desktop-enabled").read_text().strip() == "1",
                 "Fresh install should enable both owned controls")
-        self.passed.append("actual Omarchy add/validate/enable -> detached runtime, real offline Herdr link, helper, bridge files, native fallbacks")
+        self.passed.append("actual Omarchy add/validate/enable succeeds with both native fallback keys reserved; preserves their owners and installs recovery actions unbound")
+        self.passed.append("true Super+Alt+Z desktop conflict reserves zoom while exactly 25 free chords register and verify ownership in the live fixture generation before activation")
         receipt = self.state / "setup.json"
         initial_receipt = receipt.stat().st_mtime_ns
         self.start()
@@ -313,23 +406,36 @@ os.execv(%r, [%r, *args])
 
         self.run([self.helper, "desktop", "disable"])
         self.run([self.herdr, "plugin", "link", self.runtime, "--disabled"])
-        text = self.native_config.read_text().replace('key = "prefix+space"', 'key = "prefix+m"')
-        require(text != self.native_config.read_text(), "Fixture could not customize the native fallback")
+        import tomlkit
+        edited = tomlkit.parse(self.native_config.read_text())
+        menu = next(c for c in edited["keys"]["command"] if c["command"] == PLUGIN + ".menu")
+        menu["key"] = "prefix+m"
+        text = tomlkit.dumps(edited)
         self.native_config.write_text(text)
-        (self.upstream / "herdr_shell/qa_revision.py").write_text('REVISION = "updated-manager-source"\n')
-        self.commit("Real manager update fixture")
+        bridge_before = (self.prefs / "hyprland.lua").read_text()
+        registered_before = len(lines(self.root / "desktop-registration.jsonl"))
+        generation_before = read_json(self.compositor)["generation"]
+        checker = self.upstream / "herdr_shell/keymap.py"
+        checker.write_text(checker.read_text() + '\nQA_RECONCILE_REVISION = "updated-manager-checker"\n')
+        self.commit("Python-only conflict checker update fixture")
         self.run(["omarchy-plugin-update", PLUGIN, "--yes"])
         updated = self.eventually(lambda: (value if (value := self.status("ready")) and value["revision"] != first["revision"] else None),
                                   "Manager source update did not refresh the runtime and restart the supervisor", timeout=45)
-        require((self.runtime / "herdr_shell/qa_revision.py").read_text() == (self.source / "herdr_shell/qa_revision.py").read_text(),
-                "Updated manager code did not reach the runtime")
+        require((self.runtime / "herdr_shell/keymap.py").read_text() == (self.source / "herdr_shell/keymap.py").read_text(),
+                "Updated manager conflict checker did not reach the runtime")
+        require((self.prefs / "hyprland.lua").read_text() == bridge_before,
+                "Python-only update unexpectedly changed generated bridge Lua")
+        require(len(lines(self.root / "desktop-registration.jsonl")) > registered_before
+                and read_json(self.compositor)["generation"] != generation_before,
+                "Python-only update skipped desktop reload and fresh registration")
+        self.check_registered(active=False, python_revision="updated-manager-checker")
         watch_events = [row for row in lines(self.root / "processes.jsonl") if "watch" in row["argv"]]
         require(any(updated["revision"] in row["argv"] and "--wait" in row["argv"] for row in watch_events),
                 "Update must execute a replacement supervisor with the new revision")
         require(not self.native()["enabled"] and (self.prefs / "desktop-enabled").read_text().strip() == "0",
                 "Source update reenabled a user's disabled controls")
         require(self.native_config.read_text() == text, "Update changed a customized fallback or personal config")
-        self.passed.append("actual Omarchy update fast-forwards source, refreshes cached code, reenters the new supervisor, and preserves disabled controls/custom fallback")
+        self.passed.append("Python-only manager update leaves generated Lua identical but reloads/verifies 25 free chords with the new checker, reenters the supervisor, and preserves disabled controls/custom fallback")
 
         self.run([self.herdr, "plugin", "link", self.runtime, "--enabled"])
         self.run(["omarchy-plugin-disable", PLUGIN])
@@ -344,6 +450,7 @@ os.execv(%r, [%r, *args])
         require(self.native()["enabled"] and (self.prefs / "desktop-enabled").read_text().strip() == "0",
                 "Resume must restore native-on/profile-off separately")
         require(not (self.state / "suspended.json").exists(), "Resume left stale suspended preferences")
+        self.check_registered(active=False, python_revision="updated-manager-checker")
         self.passed.append("actual manager disable/resume suspends controls and restores native-on/profile-off preferences without changing user config")
 
         (self.runtime / "personal-runtime.txt").write_text("keep runtime data\n")
@@ -359,7 +466,9 @@ os.execv(%r, [%r, *args])
                     ("plugin-root", "hyprland.lua", "desktop-enabled", "binding-status.json")),
                 "Removal left owned desktop preference files")
         commands = self.commands()
-        require([c["command"] for c in commands] == [OTHER + ".menu"], "Removal touched unrelated native commands or left plugin commands")
+        require(commands == tomllib.loads(BASE)["keys"]["command"], "Removal touched unrelated native key owners or left plugin commands")
+        require(read_json(self.compositor)["owned"] == {} and read_json(self.root / "compositor-foreign.json") == self.foreign,
+                "Removal left owned handles or removed an external desktop owner")
         require(not tomllib.loads(self.native_config.read_text())["ui"]["pane_gaps"], "Removal changed personal UI settings")
         require(self.runtime.is_dir() and (self.runtime / "personal-runtime.txt").exists(), "Removal must retain the owned runtime cache and user data")
         require((self.prefs / "personal-setting.txt").exists() and (self.root / "s/herdr-shell/personal-history.txt").exists()
@@ -371,9 +480,10 @@ os.execv(%r, [%r, *args])
         self.passed.append("actual Omarchy removal deletes source first; cached supervisor removes only owned links/bindings/files and preserves runtime, state, cache, preferences and unrelated plugins")
         return {"passed": self.passed, "real": ["installed Omarchy manager scripts and manifest validation", "local Git clone/fetch/fast-forward",
                 "actual Herdr offline plugin list/link/uninstall", "native config validation and generated Lua syntax validation",
+                "actual desktop collision detection, generation rechecks and per-free-action ownership verification",
                 "managed detached supervisor, source update, singleton, disable/resume and source-gone cleanup"],
                 "fixtures": ["validated HTTPS clone URL maps to a local Git repository", "shell IPC updates only temporary shell.json; QML startup is invoked manually",
-                             "compositor calls and binding reads are stubbed in the disposable checkout only", "supervisor polling is shortened to 150ms"],
+                             "compositor registry/generation/reload/eval simulated in the disposable checkout only", "supervisor polling is shortened to 150ms"],
                 "limits": ["does not prove real QML instantiation or physical key routing; use desktop_probe.py for those"]}
 
     def stop(self):

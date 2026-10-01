@@ -296,7 +296,8 @@ def activate():
         had_desktop = desktop.installed()
         desktop_enabled = suspended.get("desktop_enabled", False) if suspended else desktop.enabled() if had_desktop else True
         store = ConfigStore()
-        proposal = store.prepare(shortcut_changes(existing=store.read()))
+        reserved_shortcuts = []
+        proposal = store.prepare(shortcut_changes(existing=store.read(), reserved=reserved_shortcuts))
         if proposal["changes"]:
             store.validator(proposal["after"])
         revision = _revision()
@@ -304,11 +305,15 @@ def activate():
         code = desktop.integration_text()
         loader = desktop.preferences_dir() / "hyprland.lua"
         bridge_changed = not had_desktop or not loader.exists() or loader.read_text() != code
+        # Conflict handling lives in Python too, so package updates must refresh
+        # registration even when the generated Lua stays identical.
+        refresh_desktop = bridge_changed or native_changed
         profile_changed = had_desktop and desktop.enabled() != desktop_enabled
         destination, source = _helper()
         if not (native_changed or bridge_changed or profile_changed or proposal["changes"]
                 or not _owned_helper() or suspended):
             return {"active": True, "native_enabled": bool(native_enabled), "desktop_enabled": desktop.enabled(),
+                    "reserved_shortcuts": reserved_shortcuts,
                     "native_changed": False, "desktop_changed": False, "helper_changed": False, "changed": False}
         helper_created = native_attempted = False
         saved_desktop = _desktop_backup()
@@ -330,7 +335,7 @@ def activate():
                     raise ShellError("CLI ownership changed during setup; the later edit was preserved.")
                 destination.symlink_to(source)
                 helper_created = True
-            if bridge_changed:
+            if refresh_desktop:
                 _check_desktop(saved_desktop)
                 bridge = desktop.install_proposal()
                 desktop.install_desktop(bridge, activate=desktop_enabled)
@@ -354,9 +359,10 @@ def activate():
             _rollback(exc, previous, native_attempted, saved_desktop, desktop_after, helper_created)
         (_state() / "suspended.json").unlink(missing_ok=True)
         return {"active": True, "native_enabled": bool(native_enabled), "desktop_enabled": desktop.enabled(),
-                "native_changed": native_changed, "desktop_changed": bridge_changed or profile_changed,
+                "reserved_shortcuts": reserved_shortcuts,
+                "native_changed": native_changed, "desktop_changed": refresh_desktop or profile_changed,
                 "helper_changed": helper_created, **result, **reload_result,
-                "changed": bool(result["changed"] or native_changed or bridge_changed or profile_changed or helper_created)}
+                "changed": bool(result["changed"] or native_changed or refresh_desktop or profile_changed or helper_created)}
 
 
 def deactivate(remove=False):

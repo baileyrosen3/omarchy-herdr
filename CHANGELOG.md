@@ -9,6 +9,10 @@
 - Replace desktop shortcut overrides with dedicated, focused Super+Alt commands.
   Refuse conflicts instead of replacing Omarchy or personal bindings, and report
   the actual installed and active integration state.
+- Install free shortcuts even when another plugin owns a chord. Leave occupied
+  native recovery defaults unbound, preserve custom keys, and retry desktop
+  registration across reloads or late conflicts. Recheck bindings on package
+  updates, including Python-only changes, while preserving a disabled profile.
 - Require Herdr 0.9.3+ for verified pane swapping and layout operations.
 - Toggle the control menu with Super+Alt+M. Add direct splits, swaps, nearest-split
   rotation, zoom, pane cycling, tab/workspace navigation, and agent/tool launchers.
