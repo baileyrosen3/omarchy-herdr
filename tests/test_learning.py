@@ -98,6 +98,28 @@ class LearningMenuTests(unittest.TestCase):
                 self.assertEqual(result["id"], "learn-game")
                 first.learning.assert_called_with(action)
 
+    def test_game_menu_skips_welcome_and_never_dispatches_a_selected_action(self):
+        first = instance(["\x03"])
+        first.practice = True
+        first.help = Mock()
+        with patch.object(onboarding, "welcome") as welcome:
+            self.assertIsNone(first.run())
+        welcome.assert_not_called()
+        for row in ({"kind": "action", "id": "workspace-close"}, {"kind": "setting", "id": "theme.name"},
+                    {"kind": "desktop-toggle", "id": "desktop-enabled"}):
+            self.assertIsNone(first.activate(row))
+        self.assertEqual(first.help.call_count, 3)
+
+    def test_game_menu_blocks_undo_hotkeys(self):
+        import curses
+        first = instance([curses.KEY_F4, "\x1a", "\x03"])
+        first.practice = True
+        first.undo = Mock()
+        with patch.object(menu, 'MenuView') as view:
+            view.return_value.too_small = False
+            self.assertIsNone(first.run())
+        first.undo.assert_not_called()
+
 
 class LearningInstallTests(unittest.TestCase):
     def dispatch(self, *, apply=True, welcome_needed=True, failure=None):

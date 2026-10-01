@@ -77,6 +77,7 @@ To run the checks yourself:
 ```sh
 python3 -m unittest discover -s tests -v
 python3 tests/probe.py
+python3 tests/trainer_probe.py
 python3 tests/omarchy_probe.py --run
 ```
 
@@ -85,6 +86,15 @@ The live probe requires `tmux` and Herdr. It creates disposable Herdr/tmux
 servers under `/tmp` and drives their menus. Read a live probe before running
 it; do not point it at a working session. Generated captures and results are
 local artifacts and are excluded from version control.
+
+The trainer probe completes all 26 live Key Quest missions in a temporary plugin
+copy and real Herdr/curses session. It submits shortcut events through the real
+private input broker, checks typed letters and wrong chords cannot score, and
+verifies all 34 presses, including zoom/restore, both four-agent cycles, and menu
+open/close, plus simulator cleanup on exit. Its active-profile check is a fixture;
+it neither installs a host bridge nor verifies compositor input. Practice agents
+are harmless simulations; Lazygit runs in a temporary repository when installed,
+with a labeled simulator fallback when unavailable.
 
 The opt-in Omarchy probe runs the packaged plugin manager and real offline Herdr
 registration under a temporary HOME/XDG tree. Local Git transport and shell IPC

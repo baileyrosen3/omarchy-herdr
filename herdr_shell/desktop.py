@@ -419,6 +419,11 @@ def route(action, window_pid, client_pid, start, address):
     current = json.loads(hypr("-j", "activewindow"))
     if current.get("pid") != window_pid or current.get("address") != address:
         return {"skipped": "window focus changed"}
+    from .game_input import route as game_route
+    practice = game_route(action, context, desktop_identity={
+        "window_pid": window_pid, "client_pid": client_pid, "start": start, "address": address})
+    if practice is not None:
+        return practice
     if action == "menu":
         return toggle_menu(context)
     if menu_running(context.socket):

@@ -70,6 +70,7 @@ class Menu:
         self.selected = 0
         self.store = ConfigStore()
         self.notice = ""
+        self.practice = os.environ.get("HERDR_SHELL_GAME_MENU") == "1"
         self.base = ""
         self.items = []
         self.section = "home"
@@ -419,6 +420,10 @@ class Menu:
             self.load()
 
     def activate(self, row):
+        if getattr(self, "practice", False):
+            self.help()
+            self.notice = "Practice menu: browse shortcuts and help. Super+Alt+M closes it."
+            return None
         self.notice = ""
         if row["kind"] == "desktop-toggle":
             if not desktop.installed():
@@ -569,7 +574,10 @@ class Menu:
 
     def run(self):
         from . import onboarding
-        if self.page in ("welcome", "walkthrough") or (self.page == "menu" and onboarding.needs_welcome()):
+        practice = getattr(self, "practice", False)
+        if practice:
+            self.notice = "Practice menu: browse shortcuts and help. Super+Alt+M closes it."
+        if not practice and (self.page in ("welcome", "walkthrough") or (self.page == "menu" and onboarding.needs_welcome())):
             job = self.learning("welcome" if self.page == "menu" else self.page)
             if job:
                 return None if job["kind"] == "dismiss" else job
@@ -633,7 +641,10 @@ class Menu:
                     self.notice = ""
                     self.open_page("keybindings" if key == curses.KEY_F2 else "settings")
                 elif key in (curses.KEY_F4, "\x1a"):
-                    self.undo()
+                    if practice:
+                        self.notice = "Practice menu: configuration changes are disabled."
+                    else:
+                        self.undo()
                 elif key == "\x15" and self.page == "keybindings":
                     state = self.view_state()
                     self.show_unassigned = not self.show_unassigned

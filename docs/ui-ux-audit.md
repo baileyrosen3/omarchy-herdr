@@ -104,11 +104,26 @@ create, move, or close terminals.
 2. Search `learn` to reopen the welcome choice or start either activity directly.
    The walkthrough should support Next and Back while retaining its place.
 3. Start Herdr Key Quest. Its practice workspace should be separate from the
-   originating workspace. Complete shortcut questions and safe pane/tab
-   exercises; feedback must reflect the actual Herdr result.
-4. Confirm that close, agent-launch, and regular-workspace navigation questions
-   do not execute those operations. Esc should exit the game while retaining
-   its practice workspace. No additional desktop chord should be registered.
+   originating workspace. Enter prepares a labeled disposable target while
+   keeping the guide focused and unzoomed. Use the full Super+Alt chord for each
+   of the 26 missions; typing its letter or using a wrong chord must not act or
+   earn points. Feedback must reflect the actual Herdr result.
+4. Practice splits, swaps, rotation, zoom/restore, pane cycles, tab/workspace
+   creation, closes, and navigation. Close targets must be disposable idle shells;
+   new work in a target must refuse the close. Workspace jumps must stay inside
+   the prepared practice fixtures. The guide should return after the result is
+   visible, including when a close removes its target.
+5. A should create a labeled harmless agent simulator. Q and Shift+Q should each
+   visit all four simulated priority groups. V should open Lazygit in a temporary
+   repository, or a clearly labeled harmless simulator if Lazygit is unavailable.
+   M should open the real menu in a browsing-only view and M again should close
+   it. Practice menu entries must not apply settings or launch ordinary actions.
+6. F1 explains; F3 skips and replays skipped missions from the results screen.
+   Esc should expire the game input broker while retaining practice spaces.
+   Unchanged simulators and their agent reports should disappear; unrelated or
+   newly started work must remain intact.
+   The originating workspace and desktop shortcuts must remain unchanged; no
+   additional desktop chord should be registered.
 
 ### 2. Search and returning to your place
 

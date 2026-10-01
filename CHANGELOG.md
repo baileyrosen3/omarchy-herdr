@@ -25,8 +25,11 @@
   with explicit Shift combinations and live availability instead of repeated
   action descriptions.
 - Offer an optional first-menu walkthrough or Herdr Key Quest learning game.
-  Keep the game in a practice workspace, check safe live exercises against
-  Herdr state, and teach destructive actions through questions.
+  Practice all 26 real Super+Alt shortcuts through live missions and verified
+  Herdr results. Keep the guide outside disposable close targets, bound workspace
+  jumps to practice fixtures, use harmless practice agents and a temporary Git
+  repository, and open the real menu in a browsing-only practice view. Stop owned
+  simulators and clear their agent reports on exit while preserving practice panes.
 - Add previewable update and removal scripts. Preserve disabled desktop profiles,
   personal configuration, backups, and practice workspaces.
 - Preserve split orientation, terminal identities, running processes, and zoom

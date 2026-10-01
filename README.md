@@ -98,13 +98,17 @@ herdr-shell learn walkthrough
 herdr-shell learn game
 ```
 
-The walkthrough is read-only. **Herdr Key Quest** creates its own practice
-workspace: **26 shortcut questions, 8 safe live drills, and 5 feature questions**.
-Live drills verify actual pane/tab changes after you press a shortcut. Agent
-launches and closing work are taught through questions. **F1** hints, **F3** skips,
-and the results screen can replay skipped challenges. Recall works without the
-bridge; live drills need their shortcut active. Esc leaves the practice workspace
-available for you to close when finished.
+The walkthrough is read-only. **Herdr Key Quest** has **26 live shortcut missions**.
+Enter prepares a labeled practice target; press its full **Super+Alt** chord,
+watch the action, and earn points when Herdr verifies the result. The guide stays
+safe while splits, swaps, closes, tabs, and workspace jumps use disposable targets.
+Practice agents are harmless simulations. Git practice uses a temporary repository
+with Lazygit, or a labeled simulator when Lazygit is unavailable.
+M opens the real menu in a browsing-only practice view, then M closes it.
+
+The game requires active shortcuts. **F1** explains, **F3** skips or replays skipped
+missions, and Esc stops unchanged simulators while keeping the practice spaces.
+Zoom practices both presses; each agent cycle visits all four priority groups.
 
 ## Settings and tools
 

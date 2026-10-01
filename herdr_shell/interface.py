@@ -53,7 +53,7 @@ DESCRIPTIONS = {
     "menu": "Super+Alt+M opens or closes the control menu. Selecting this item closes the current menu.",
     "welcome": "Choose a guided walkthrough, play Key Quest in a separate workspace, or open the control menu.",
     "walkthrough": "Learn the Super+Alt shortcuts, agent priority sweep, safe closing, and menu features step by step.",
-    "learn-game": "Play Key Quest in its own Herdr workspace. Recall all 26 shortcuts, then practice safe actions. Existing work stays in place.",
+    "learn-game": "Play 26 live shortcut missions in a new Herdr practice workspace. Press real Super+Alt chords and watch the actions happen.",
     "agent-new": "Open your default Omarchy agent in a new pane to the right, in this tab and directory.",
     "launch-git": "Open Lazygit in a regular pane to the right, using this pane's directory.",
     "launch-editor": "Open your preferred editor in a popup in this directory.",

@@ -447,6 +447,24 @@ class DesktopTests(unittest.TestCase):
             self.assertIn("skipped", d.route("pane-zoom", 10, 20, "999", "0x123"))
         execute.assert_not_called()
 
+    def test_live_game_consumes_chord_before_normal_action_or_menu_dispatch(self):
+        window = {"pid": 10, "address": "0x123"}
+        process = d.Process(20, 10, "S", True, "999", ("herdr",))
+        pane = {"pane_id": "p", "workspace_id": "w", "tab_id": "t", "terminal_id": "term"}
+        with patch.object(d, "enabled", return_value=True), patch.object(d, "find_clients", return_value=[(process, {})]), \
+             patch.object(d, "socket_for", return_value="socket"), patch.object(d, "Client") as client, \
+             patch.object(d, "execute") as execute, patch.object(d, "hypr", return_value=json.dumps(window)), \
+             patch.object(d, "toggle_menu") as menu, patch.object(d, "menu_running") as running, \
+             patch("herdr_shell.game_input.route", return_value={"game": "queued"}) as game:
+            client.return_value.snapshot.return_value = {"focused_pane_id": "p", "panes": [pane]}
+            for action in ('pane-close', 'agent-new', 'menu'):
+                self.assertEqual(d.route(action, 10, 20, '999', '0x123'), {"game": "queued"})
+                self.assertEqual(game.call_args.kwargs['desktop_identity'], {
+                    "window_pid": 10, "client_pid": 20, "start": '999', "address": '0x123'})
+        execute.assert_not_called()
+        menu.assert_not_called()
+        running.assert_not_called()
+
     def test_lua_registers_only_free_chords_and_routes_only_local_herdr(self):
         generated = self.root / "bridge.lua"
         generated.write_text(d.integration_text())
