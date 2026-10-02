@@ -26,6 +26,8 @@ def parser():
     p.add_argument("--config", help="Herdr config file to edit/check")
     p.add_argument("--context", help=argparse.SUPPRESS)
     sub = p.add_subparsers(dest="command", required=True)
+    footer = sub.add_parser("footer", help="One row of currently active shortcut hints")
+    footer.add_argument("--width", type=int, help="Available terminal columns (default: native footer width)")
     for name in ("menu", "settings"):
         sub.add_parser(name).add_argument("--inline", action="store_true", help="Run here instead of opening a popup")
     learn = sub.add_parser("learn", help="Read-only walkthrough, hands-on practice, or timed Speed Run")
@@ -176,7 +178,10 @@ def install(args, store):
     source = root / "bin/herdr-shell"
     before = store.read()
     reserved_shortcuts = []
-    proposal = store.prepare(shortcut_changes(existing=before, reserved=reserved_shortcuts), before)
+    from . import footer_setup
+    changes = shortcut_changes(existing=before, reserved=reserved_shortcuts)
+    changes += footer_setup.changes(before, root)
+    proposal = store.prepare(changes, before)
     print(f"Plugin: {root}\nCLI: {destination}\n" + proposal["diff"])
     if not args.apply:
         return {"preview": True, "reserved_shortcuts": reserved_shortcuts}
@@ -233,6 +238,10 @@ def dispatch(args):
     if args.config:
         os.environ["HERDR_CONFIG_PATH"] = str(Path(args.config).expanduser().resolve())
     store = ConfigStore()
+    if args.command == "footer":
+        from .footer import output
+        print(output(args.width, store))
+        return
     if args.command in ("update", "remove"):
         from . import lifecycle
         return lifecycle.update(args, store, install) if args.command == "update" else lifecycle.remove(args, store)

@@ -90,6 +90,18 @@ sections, and **Esc** to clear search, go back, or close. **F2** opens Keybindin
 Search and selection survive editing and refresh. The menu uses your terminal
 palette and retains the Herdr/Omarchy branding; minimum size is **46 × 16**.
 
+## Shortcut footer
+
+The footer provider shows **one row** of active shortcuts, with **M Menu** first
+and fewer hints in narrow windows. It follows Herdr's colors and leaves tabs at
+the top. Conflicted keys stay out of the hints.
+
+**Stock Herdr 0.9.3 cannot draw this footer yet.** The plugin enables it only when
+Herdr explicitly advertises native footer support; normal installation never
+replaces your Herdr binary. The isolated native extension and validation notes are
+in [Footer support](docs/footer.md). Preview the hints with
+`herdr-shell footer --width 100`.
+
 ## Learn by doing
 
 First welcome offers **Walkthrough** or **Hands-on walkthrough**; Esc closes it.

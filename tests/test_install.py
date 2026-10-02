@@ -9,7 +9,7 @@ import tomllib
 import unittest
 from unittest.mock import Mock, patch
 
-from herdr_shell import cli, config
+from herdr_shell import cli, config, footer_setup
 from herdr_shell import PLUGIN_ID
 from herdr_shell.runtime import ShellError
 
@@ -69,6 +69,7 @@ class InstallTests(unittest.TestCase):
                        XDG_STATE_HOME=str(self.home / 'state'), HERDR_SOCKET_PATH='/wrong/default.sock'),
             patch.object(config, 'defaults', return_value=DEFAULTS),
             patch.object(cli, 'Client', self.factory),
+            patch.object(footer_setup, 'supported', return_value=False),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -399,6 +400,24 @@ class InstallTests(unittest.TestCase):
         self.assertFalse(self.helper.is_symlink())
         self.assertEqual(self.path.read_text(), BASE)
         self.assertEqual(self.server.plugins[0]['plugin_root'], str(self.root))
+
+    def test_capable_native_install_adds_provider_in_same_config_transaction(self):
+        with patch.object(footer_setup, "supported", return_value=True):
+            result = self.install("--socket", "/explicit/work.sock")
+            entries = tomllib.loads(self.path.read_text())["ui"]["footer"]
+            self.assertEqual(entries[0]["command"], footer_setup.provider_command(self.root))
+            self.assertTrue(result["changed"])
+            again = self.install("--socket", "/explicit/work.sock")
+        self.assertFalse(again["changed"])
+        self.assertEqual(len(tomllib.loads(self.path.read_text())["ui"]["footer"]), 1)
+
+    def test_capable_native_install_reload_failure_restores_footer(self):
+        self.server.reload_error = ShellError("reload denied")
+        with patch.object(footer_setup, "supported", return_value=True):
+            with self.assertRaisesRegex(ShellError, "reload denied"):
+                self.install("--socket", "/explicit/work.sock")
+        self.assertEqual(self.path.read_text(), BASE)
+        self.assertFalse(self.helper.is_symlink())
 
 
 if __name__ == '__main__':

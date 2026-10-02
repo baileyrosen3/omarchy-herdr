@@ -10,3 +10,6 @@ docs/*-capture.txt
 docs/keybinding-preview.txt
 docs/*-checks.json
 .DS_Store
+
+# Isolated native footer experiments and build evidence.
+work/

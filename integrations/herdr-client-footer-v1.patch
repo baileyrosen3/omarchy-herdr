@@ -1,0 +1,1622 @@
+diff --git a/docs/next/website/src/content/docs/configuration.mdx b/docs/next/website/src/content/docs/configuration.mdx
+index 9188dbb..56fafd8 100644
+--- a/docs/next/website/src/content/docs/configuration.mdx
++++ b/docs/next/website/src/content/docs/configuration.mdx
+@@ -335,6 +335,23 @@ Command entries run immediately and then at `interval_seconds` without blocking
+
+ Separators appear only between visible entries. Set `tab_bar_right_separator = ""` for direct concatenation. On a narrow tab row, the complete status area yields to the tabs and their controls.
+
++### Client-local footer
++
++`ui.footer` adds one separate, full-window footer row below the panes and sidebar. It leaves tab placement unchanged, inherits the client theme, and stays outside pane navigation, swaps, closes, and agent selection. An empty list disables it. Tiny terminals suppress the footer before it would displace the pane area. Modal dialogs may temporarily cover it.
++
++```toml
++[ui]
++footer = [
++  { type = "text", text = "Useful shortcuts" },
++  { type = "command", command = "my-hints-helper", interval_seconds = 5, timeout_seconds = 2 },
++]
++footer_separator = " · "
++```
++
++Footer commands run on the client machine only when a connected Local endpoint is selected. They receive `HERDR_FOOTER_WIDTH` (available columns), `HERDR_FOOTER_LOCAL=1`, the selected Local API socket in `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH`, `HERDR_CONFIG_PATH`, and active workspace, tab and pane IDs. Commands are suppressed on SSH endpoints or while disconnected; literal text still renders. They run independently of rendering with no overlap per entry, bounded output, timeouts, and process-group cleanup on configuration reload or client exit. Herdr uses the last successful output line, removes terminal controls, limits it to 4096 characters, and clips the row by display width without wrapping. Failures clear the corresponding text without changing the reserved row. At most 16 entries are supported, with intervals 1–31536000 seconds and timeouts 1–3600 seconds.
++
++`herdr --client-capabilities` prints supported client feature versions as JSON; `{"footer":1}` advertises this footer configuration. This client-local feature needs no endpoint protocol change and works with existing compatible servers.
++
+ ### Outer terminal window title
+
+ Herdr emulates the terminals in its panes, so an `OSC 0`/`OSC 2` title written inside a pane stops at Herdr. Herdr writes its own title to the terminal it runs in, which is what window managers and terminal tab bars read:
+diff --git a/docs/next/website/src/data/config-reference.json b/docs/next/website/src/data/config-reference.json
+index eb7e08d..2a01193 100644
+--- a/docs/next/website/src/data/config-reference.json
++++ b/docs/next/website/src/data/config-reference.json
+@@ -1028,6 +1028,19 @@
+           "default": "\" \"",
+           "description": "Text inserted between visible right-aligned tab bar entries."
+         },
++        {
++          "key": "ui.footer",
++          "type": "array",
++          "default": "[]",
++          "description": "Client-local text or bounded command entries in a separate full-window footer row. Empty disables it; commands execute only with a connected Local endpoint selected.",
++          "values": ["text", "command"]
++        },
++        {
++          "key": "ui.footer_separator",
++          "type": "string",
++          "default": "\" · \"",
++          "description": "Text inserted between visible client-local footer entries."
++        },
+         {
+           "key": "ui.window_title",
+           "type": "string",
+diff --git a/src/cli/spec.rs b/src/cli/spec.rs
+index 1cfc2e7..cf54110 100644
+--- a/src/cli/spec.rs
++++ b/src/cli/spec.rs
+@@ -21,6 +21,7 @@ pub(super) fn command() -> Command {
+         )
+         .arg(flag("handoff").help("Opt into live handoff for update or remote attach"))
+         .arg(flag("default-config").help("Print default configuration and exit"))
++        .arg(flag("client-capabilities").help("Print client capability versions as JSON and exit"))
+         .arg(flag("skill").help("Print the agent skill file and exit"))
+         .arg(
+             Arg::new("version")
+diff --git a/src/client/mod.rs b/src/client/mod.rs
+index d55e4c4..a9fae08 100644
+--- a/src/client/mod.rs
++++ b/src/client/mod.rs
+@@ -2250,7 +2250,8 @@ async fn run_client_loop(
+                         outcome.repaint |= notification_repaint
+                             | shell.tick_copy_feedback(now)
+                             | shell.tick_workspace_highlight(now)
+-                            | shell.tick_endpoint_error(now);
++                            | shell.tick_endpoint_error(now)
++                            | shell.tick_footer(now, state.reported_size.0, state.reported_size.1);
+                         let frame = outcome
+                             .repaint
+                             .then(|| shell.compose(state.reported_size.0, state.reported_size.1))
+diff --git a/src/client/shell.rs b/src/client/shell.rs
+index 2d18044..8571967 100644
+--- a/src/client/shell.rs
++++ b/src/client/shell.rs
+@@ -17,6 +17,7 @@ mod endpoint_notices;
+ mod endpoint_sidebar;
+ mod endpoints;
+ pub(super) use endpoints::*;
++mod footer;
+ mod global_menu;
+ mod graphics;
+ mod input;
+diff --git a/src/client/shell/composition.rs b/src/client/shell/composition.rs
+index b7ab4a9..5518543 100644
+--- a/src/client/shell/composition.rs
++++ b/src/client/shell/composition.rs
+@@ -127,7 +127,7 @@ impl ClientShellState {
+         }
+         render::render_mode_bar(
+             &mut buffer,
+-            Rect::new(0, 0, cols, rows),
++            Rect::new(0, 0, cols, rows.saturating_sub(layout.footer.height)),
+             self.mode,
+             None,
+             self.endpoint_error.as_deref(),
+@@ -138,12 +138,20 @@ impl ClientShellState {
+         if let Some(notice) = &self.visible_endpoint_notice {
+             self.hits.notification_toast = endpoint_notices::render_notice(
+                 &mut buffer,
+-                Rect::new(0, 0, cols, rows),
++                Rect::new(0, 0, cols, rows.saturating_sub(layout.footer.height)),
+                 notice,
+                 1,
+                 &self.config.palette,
+             );
+         }
++        super::footer::render_footer(
++            &mut buffer,
++            layout.footer,
++            &self.footer,
++            &self.config.footer_separator,
++            &self.config.palette,
++            self.footer_commands_current(layout.footer),
++        );
+         FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[])
+     }
+
+@@ -338,6 +346,14 @@ impl ClientShellState {
+             self.hits.tab_scroll_left = Rect::default();
+             self.hits.tab_scroll_right = Rect::default();
+         }
++        super::footer::render_footer(
++            &mut buffer,
++            layout.footer,
++            &self.footer,
++            &self.config.footer_separator,
++            &self.config.palette,
++            self.footer_commands_current(layout.footer),
++        );
+         let mut frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
+         let mode_bar_cells = mode_bar.map(|bar| {
+             let start = usize::from(bar.y) * usize::from(frame.width) + usize::from(bar.x);
+@@ -468,7 +484,7 @@ impl ClientShellState {
+             let mut composed = frame.to_ratatui_buffer()?;
+             if let Some(diagnostic) = self.config_diagnostic.as_deref() {
+                 let diagnostic_area = if layout.mobile_header.is_empty() {
+-                    Rect::new(0, 0, cols, rows)
++                    Rect::new(0, 0, cols, rows.saturating_sub(layout.footer.height))
+                 } else {
+                     layout.pane_surface
+                 };
+@@ -483,7 +499,7 @@ impl ClientShellState {
+             let lifecycle_offset = active_lifecycle.as_ref().map_or(0, |(label, status)| {
+                 occlusion.cover(endpoint_notices::render_lifecycle_banner(
+                     &mut composed,
+-                    Rect::new(0, 0, cols, rows),
++                    Rect::new(0, 0, cols, rows.saturating_sub(layout.footer.height)),
+                     label,
+                     *status,
+                     u16::from(has_config_diagnostic) + layout.mobile_header.height,
+@@ -495,7 +511,7 @@ impl ClientShellState {
+                 self.hits.notification_toast = if layout.mobile_header.is_empty() {
+                     endpoint_notices::render_notice(
+                         &mut composed,
+-                        Rect::new(0, 0, cols, rows),
++                        Rect::new(0, 0, cols, rows.saturating_sub(layout.footer.height)),
+                         notice,
+                         u16::from(has_config_diagnostic) + lifecycle_offset,
+                         &self.config.palette,
+@@ -503,7 +519,7 @@ impl ClientShellState {
+                 } else {
+                     endpoint_notices::render_mobile_banner(
+                         &mut composed,
+-                        Rect::new(0, 0, cols, rows),
++                        Rect::new(0, 0, cols, rows.saturating_sub(layout.footer.height)),
+                         notice,
+                         has_config_diagnostic || lifecycle_offset > 0,
+                         &self.config.palette,
+@@ -513,7 +529,7 @@ impl ClientShellState {
+                 self.hits.notification_toast = if layout.mobile_header.is_empty() {
+                     notifications::render_visible_notification(
+                         &mut composed,
+-                        Rect::new(0, 0, cols, rows),
++                        Rect::new(0, 0, cols, rows.saturating_sub(layout.footer.height)),
+                         notification,
+                         self.config.toast_position,
+                         u16::from(has_config_diagnostic) + lifecycle_offset,
+@@ -522,7 +538,7 @@ impl ClientShellState {
+                 } else {
+                     notifications::render_mobile_notification_banner(
+                         &mut composed,
+-                        Rect::new(0, 0, cols, rows),
++                        Rect::new(0, 0, cols, rows.saturating_sub(layout.footer.height)),
+                         notification,
+                         has_config_diagnostic || lifecycle_offset > 0,
+                         &self.config.palette,
+@@ -539,7 +555,7 @@ impl ClientShellState {
+             let feedback_area = if layout.mobile_header.is_empty() {
+                 layout.pane_surface
+             } else {
+-                Rect::new(0, 0, cols, rows)
++                Rect::new(0, 0, cols, rows.saturating_sub(layout.footer.height))
+             };
+             let offset = crate::ui::copy_feedback_offset_for_toast(
+                 feedback_area,
+@@ -602,7 +618,7 @@ impl ClientShellState {
+             occlusion.cover(composed.area);
+             super::mobile::render_mobile_switcher(
+                 &mut composed,
+-                Rect::new(0, 0, cols, rows),
++                Rect::new(0, 0, cols, rows.saturating_sub(layout.footer.height)),
+                 snapshot,
+                 &self.endpoints,
+                 &self.active_endpoint_id,
+@@ -617,7 +633,7 @@ impl ClientShellState {
+             if let Some((label, status)) = active_lifecycle.as_ref() {
+                 let _ = endpoint_notices::render_lifecycle_banner(
+                     &mut composed,
+-                    Rect::new(0, 0, cols, rows),
++                    Rect::new(0, 0, cols, rows.saturating_sub(layout.footer.height)),
+                     label,
+                     *status,
+                     2,
+@@ -627,7 +643,7 @@ impl ClientShellState {
+             if let Some(notice) = self.visible_endpoint_notice.as_ref() {
+                 self.hits.notification_toast = endpoint_notices::render_mobile_banner(
+                     &mut composed,
+-                    Rect::new(0, 0, cols, rows),
++                    Rect::new(0, 0, cols, rows.saturating_sub(layout.footer.height)),
+                     notice,
+                     active_lifecycle.is_some(),
+                     &self.config.palette,
+diff --git a/src/client/shell/config.rs b/src/client/shell/config.rs
+index bfa1fb2..56f055c 100644
+--- a/src/client/shell/config.rs
++++ b/src/client/shell/config.rs
+@@ -77,6 +77,7 @@ impl ClientShellState {
+                     &loaded.diagnostics,
+                     &loaded.invalid_sections,
+                 );
++                self.footer.configure(&self.config.footer);
+                 if let Some(appearance) = self.host_appearance {
+                     self.config.palette = crate::app::client_palette_for_appearance(
+                         &self.config.theme_runtime,
+@@ -120,6 +121,13 @@ impl ClientShellConfig {
+             sidebar_collapsed_mode: config.ui.sidebar_collapsed_mode,
+             mobile_width_threshold: config.ui.mobile_width_threshold,
+             tab_bar_position: config.ui.tab_bar_position,
++            footer: config.ui.footer.clone(),
++            footer_separator: config
++                .ui
++                .footer_separator
++                .chars()
++                .filter(|c| !c.is_control())
++                .collect(),
+             hide_tab_bar_when_single_tab: config.ui.hide_tab_bar_when_single_tab,
+             spaces: config.ui.sidebar.spaces.clone(),
+             agents: config.ui.sidebar.agents.clone(),
+@@ -322,6 +330,13 @@ impl ClientShellConfig {
+                 self.sidebar_collapsed_mode = ui.sidebar_collapsed_mode;
+                 self.mobile_width_threshold = ui.mobile_width_threshold;
+                 self.tab_bar_position = ui.tab_bar_position;
++                diagnostics.extend(crate::config::footer_diagnostics(&ui.footer));
++                self.footer = ui.footer.clone();
++                self.footer_separator = ui
++                    .footer_separator
++                    .chars()
++                    .filter(|c| !c.is_control())
++                    .collect();
+                 self.hide_tab_bar_when_single_tab = ui.hide_tab_bar_when_single_tab;
+                 self.spaces = ui.sidebar.spaces.clone();
+                 self.agents = ui.sidebar.agents.clone();
+@@ -365,16 +380,32 @@ impl ClientShellConfig {
+         tab_count: usize,
+         sidebar_width: u16,
+     ) -> ClientShellLayout {
+-        if cols <= self.mobile_width_threshold {
+-            let header_height = rows.min(2);
++        // The footer is independent chrome, not a layout pane. Preserve one
++        // terminal row before allocating optional chrome at tiny geometries.
++        let mobile = cols <= self.mobile_width_threshold;
++        let top_chrome = if mobile {
++            2
++        } else {
++            u16::from(!(self.hide_tab_bar_when_single_tab && tab_count == 1))
++        };
++        let footer_height = u16::from(!self.footer.is_empty() && cols > 0 && rows > top_chrome + 1);
++        let content_rows = rows.saturating_sub(footer_height);
++        let footer = Rect::new(0, content_rows, cols, footer_height);
++        if mobile {
++            let header_height = content_rows.min(2);
+             return ClientShellLayout {
+                 sidebar: Rect::default(),
+                 tab_bar: Rect::default(),
+                 mobile_header: Rect::new(0, 0, cols, header_height),
+-                pane_surface: Rect::new(0, header_height, cols, rows.saturating_sub(header_height)),
++                pane_surface: Rect::new(
++                    0,
++                    header_height,
++                    cols,
++                    content_rows.saturating_sub(header_height),
++                ),
++                footer,
+             };
+         }
+-
+         let sidebar_width = if sidebar_collapsed {
+             match self.sidebar_collapsed_mode {
+                 SidebarCollapsedModeConfig::Compact => 4,
+@@ -389,8 +420,14 @@ impl ClientShellConfig {
+             sidebar_width.clamp(min, max)
+         }
+         .min(cols.saturating_sub(1));
+-        let main = Rect::new(sidebar_width, 0, cols.saturating_sub(sidebar_width), rows);
+-        let show_tab_bar = rows > 1 && !(self.hide_tab_bar_when_single_tab && tab_count == 1);
++        let main = Rect::new(
++            sidebar_width,
++            0,
++            cols.saturating_sub(sidebar_width),
++            content_rows,
++        );
++        let show_tab_bar =
++            content_rows > 1 && !(self.hide_tab_bar_when_single_tab && tab_count == 1);
+         let tab_height = u16::from(show_tab_bar);
+         let (tab_bar, pane_surface) = match self.tab_bar_position {
+             TabBarPositionConfig::Top => (
+@@ -399,25 +436,30 @@ impl ClientShellConfig {
+                     main.x,
+                     tab_height,
+                     main.width,
+-                    rows.saturating_sub(tab_height),
++                    content_rows.saturating_sub(tab_height),
+                 ),
+             ),
+             TabBarPositionConfig::Bottom => (
+                 Rect::new(
+                     main.x,
+-                    rows.saturating_sub(tab_height),
++                    content_rows.saturating_sub(tab_height),
+                     main.width,
+                     tab_height,
+                 ),
+-                Rect::new(main.x, 0, main.width, rows.saturating_sub(tab_height)),
++                Rect::new(
++                    main.x,
++                    0,
++                    main.width,
++                    content_rows.saturating_sub(tab_height),
++                ),
+             ),
+         };
+-
+         ClientShellLayout {
+-            sidebar: Rect::new(0, 0, sidebar_width, rows),
++            sidebar: Rect::new(0, 0, sidebar_width, content_rows),
+             tab_bar,
+             mobile_header: Rect::default(),
+             pane_surface,
++            footer,
+         }
+     }
+
+diff --git a/src/client/shell/footer.rs b/src/client/shell/footer.rs
+new file mode 100644
+index 0000000..10a4477
+--- /dev/null
++++ b/src/client/shell/footer.rs
+@@ -0,0 +1,821 @@
++//! Client-local footer. Runtime work happens on timer ticks, never in render.
++//! Commands execute only while a connected Local endpoint is selected.
++use crate::config::{FooterEntryConfig, MAX_FOOTER_ENTRIES};
++use std::{
++    process::Stdio,
++    sync::{
++        atomic::{AtomicBool, Ordering},
++        mpsc, Arc, Mutex,
++    },
++    time::{Duration, Instant},
++};
++use tokio::io::AsyncReadExt;
++
++const MAX_COMMAND_LINE_BYTES: usize = 4096;
++const MAX_TEXT_CHARS: usize = 4096;
++
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub(super) struct FooterContext {
++    pub width: u16,
++    pub local: bool,
++    pub boot_id: String,
++    pub workspace_id: Option<String>,
++    pub tab_id: Option<String>,
++    pub pane_id: Option<String>,
++}
++
++#[derive(Debug)]
++struct Completion {
++    generation: u64,
++    index: usize,
++    output: Result<Option<String>, String>,
++}
++
++struct CommandTask {
++    abort: tokio::task::AbortHandle,
++    control: Arc<StatusCommandControl>,
++}
++impl Drop for CommandTask {
++    fn drop(&mut self) {
++        self.control.terminate();
++        self.abort.abort();
++    }
++}
++
++struct Entry {
++    config: FooterEntryConfig,
++    text: Option<String>,
++    next_run: Instant,
++    task: Option<CommandTask>,
++}
++
++pub(super) struct FooterRuntime {
++    config: Vec<FooterEntryConfig>,
++    entries: Vec<Entry>,
++    generation: u64,
++    context: Option<FooterContext>,
++    tx: mpsc::SyncSender<Completion>,
++    rx: mpsc::Receiver<Completion>,
++}
++
++impl FooterRuntime {
++    pub(super) fn new(config: &[FooterEntryConfig]) -> Self {
++        let (tx, rx) = mpsc::sync_channel(MAX_FOOTER_ENTRIES);
++        let mut runtime = Self {
++            config: Vec::new(),
++            entries: Vec::new(),
++            generation: 0,
++            context: None,
++            tx,
++            rx,
++        };
++        runtime.configure(config);
++        runtime
++    }
++
++    pub(super) fn configure(&mut self, config: &[FooterEntryConfig]) {
++        if self.config == config {
++            return;
++        }
++        self.entries.clear(); // Synchronously terminate groups before releasing tasks.
++        self.generation = self.generation.wrapping_add(1);
++        self.context = None;
++        self.config = config.to_vec();
++        let (tx, rx) = mpsc::sync_channel(MAX_FOOTER_ENTRIES);
++        self.tx = tx;
++        self.rx = rx;
++        let now = Instant::now();
++        for entry in config.iter().take(MAX_FOOTER_ENTRIES) {
++            let text = match entry {
++                FooterEntryConfig::Text { text } => sanitize_status_text(text),
++                FooterEntryConfig::Command {
++                    command,
++                    interval_seconds,
++                    timeout_seconds,
++                } if !command.trim().is_empty()
++                    && (1..=31_536_000).contains(interval_seconds)
++                    && (1..=3_600).contains(timeout_seconds)
++                    && crate::platform::status_commands_supported() =>
++                {
++                    None
++                }
++                FooterEntryConfig::Command { .. } => continue,
++            };
++            self.entries.push(Entry {
++                config: entry.clone(),
++                text,
++                next_run: now,
++                task: None,
++            });
++        }
++    }
++
++    pub(super) fn tick(&mut self, now: Instant, context: FooterContext) -> bool {
++        if self.entries.is_empty() {
++            return false;
++        }
++        let mut changed = false;
++        if self.context.as_ref() != Some(&context) {
++            self.generation = self.generation.wrapping_add(1);
++            for entry in &mut self.entries {
++                if matches!(entry.config, FooterEntryConfig::Command { .. }) {
++                    entry.task = None;
++                    changed |= entry.text.take().is_some();
++                    entry.next_run = now;
++                }
++            }
++            self.context = Some(context.clone());
++        }
++        for completed in self.rx.try_iter() {
++            if completed.generation != self.generation {
++                continue;
++            }
++            let Some(entry) = self.entries.get_mut(completed.index) else {
++                continue;
++            };
++            entry.task = None;
++            let output = completed.output.unwrap_or_else(|error| {
++                tracing::debug!(%error, "client footer command failed");
++                None
++            });
++            changed |= entry.text != output;
++            entry.text = output;
++        }
++        if !context.local || context.width == 0 {
++            return changed;
++        }
++        let Ok(handle) = tokio::runtime::Handle::try_current() else {
++            return changed;
++        };
++        for (index, entry) in self.entries.iter_mut().enumerate() {
++            let FooterEntryConfig::Command {
++                command,
++                interval_seconds,
++                timeout_seconds,
++            } = &entry.config
++            else {
++                continue;
++            };
++            // A completed task whose bounded result was dropped must not stall
++            // its entry forever (for example after many rapid context changes).
++            if entry
++                .task
++                .as_ref()
++                .is_some_and(|task| task.abort.is_finished())
++            {
++                entry.task = None;
++            }
++            if entry.task.is_some() || now < entry.next_run {
++                continue;
++            }
++            entry.next_run = now
++                .checked_add(Duration::from_secs(*interval_seconds))
++                .unwrap_or(now);
++            let tx = self.tx.clone();
++            let generation = self.generation;
++            let command = command.clone();
++            let timeout = Duration::from_secs(*timeout_seconds);
++            let deadline = tokio::time::Instant::now() + timeout;
++            let environment = context.environment();
++            let control = Arc::new(StatusCommandControl {
++                terminated: AtomicBool::new(false),
++                process_group: Mutex::new(None),
++            });
++            let task_control = Arc::clone(&control);
++            let task = handle.spawn(async move {
++                let output = run_status_command(
++                    &task_control,
++                    command,
++                    timeout,
++                    deadline,
++                    environment,
++                    None,
++                )
++                .await;
++                task_control.terminate();
++                // At most one result per bounded entry. Never block terminal input.
++                let _ = tx.try_send(Completion {
++                    generation,
++                    index,
++                    output,
++                });
++            });
++            entry.task = Some(CommandTask {
++                abort: task.abort_handle(),
++                control,
++            });
++        }
++        changed
++    }
++
++    fn has_commands(&self) -> bool {
++        self.entries
++            .iter()
++            .any(|entry| matches!(entry.config, FooterEntryConfig::Command { .. }))
++    }
++
++    fn visible_texts(&self, commands_current: bool) -> impl Iterator<Item = &str> {
++        self.entries.iter().filter_map(move |entry| {
++            if !commands_current && matches!(entry.config, FooterEntryConfig::Command { .. }) {
++                None
++            } else {
++                entry.text.as_deref()
++            }
++        })
++    }
++
++    #[cfg(test)]
++    fn texts(&self) -> impl Iterator<Item = &str> {
++        self.visible_texts(true)
++    }
++}
++
++impl FooterContext {
++    fn environment(&self) -> Vec<(String, String)> {
++        let mut environment = vec![
++            ("HERDR_FOOTER_WIDTH".into(), self.width.to_string()),
++            ("HERDR_FOOTER_ENDPOINT".into(), "local".into()),
++            ("HERDR_FOOTER_LOCAL".into(), "1".into()),
++            (
++                crate::config::CONFIG_PATH_ENV_VAR.into(),
++                crate::config::config_path().display().to_string(),
++            ),
++            (
++                crate::api::SOCKET_PATH_ENV_VAR.into(),
++                crate::api::socket_path().display().to_string(),
++            ),
++        ];
++        if let Ok(binary) = std::env::current_exe() {
++            environment.push(("HERDR_BIN_PATH".into(), binary.display().to_string()));
++        }
++        for (name, value) in [
++            ("HERDR_ACTIVE_WORKSPACE_ID", &self.workspace_id),
++            ("HERDR_ACTIVE_TAB_ID", &self.tab_id),
++            ("HERDR_ACTIVE_PANE_ID", &self.pane_id),
++        ] {
++            if let Some(value) = value {
++                environment.push((name.into(), value.clone()));
++            }
++        }
++        environment
++    }
++}
++
++pub(super) fn render_footer(
++    buffer: &mut super::Buffer,
++    area: super::Rect,
++    runtime: &FooterRuntime,
++    separator: &str,
++    palette: &super::Palette,
++    commands_current: bool,
++) {
++    if area.is_empty() {
++        return;
++    }
++    let style = super::Style::default()
++        .fg(palette.overlay1)
++        .bg(palette.panel_bg);
++    buffer.set_style(area, style);
++    let mut x = area.x;
++    for (index, text) in runtime.visible_texts(commands_current).enumerate() {
++        if index > 0 {
++            super::render::put_text(
++                buffer,
++                x,
++                area.y,
++                area.right().saturating_sub(x),
++                separator,
++                style,
++            );
++            x = x
++                .saturating_add(super::render::display_width(separator))
++                .min(area.right());
++        }
++        if x >= area.right() {
++            break;
++        }
++        super::render::put_text(
++            buffer,
++            x,
++            area.y,
++            area.right().saturating_sub(x),
++            text,
++            style,
++        );
++        x = x
++            .saturating_add(super::render::display_width(text))
++            .min(area.right());
++    }
++}
++
++impl super::ClientShellState {
++    pub(super) fn footer_commands_current(&self, area: super::Rect) -> bool {
++        if area.is_empty()
++            || !self.active_endpoint_id.is_local()
++            || self.endpoint_status(&self.active_endpoint_id)
++                != Some(super::ClientEndpointStatus::Online)
++        {
++            return false;
++        }
++        let Some(context) = self.footer.context.as_ref() else {
++            return false;
++        };
++        let Some(snapshot) = self.snapshot.as_deref() else {
++            return false;
++        };
++        context.local
++            && context.width == area.width
++            && context.boot_id == snapshot.boot_id
++            && context.workspace_id == snapshot.focused_workspace_id
++            && context.tab_id == snapshot.focused_tab_id
++            && context.pane_id == snapshot.focused_pane_id
++    }
++
++    pub(crate) fn tick_footer(&mut self, now: Instant, cols: u16, rows: u16) -> bool {
++        if !self.footer.has_commands() {
++            return false;
++        }
++        let area = self.layout(cols, rows).footer;
++        let snapshot = self.snapshot.as_deref();
++        self.footer.tick(
++            now,
++            FooterContext {
++                width: if area.is_empty() { 0 } else { area.width },
++                local: self.active_endpoint_id.is_local()
++                    && self.endpoint_status(&self.active_endpoint_id)
++                        == Some(super::ClientEndpointStatus::Online)
++                    && crate::server::socket_paths::derive_client_socket_from_api_socket(
++                        &crate::api::socket_path(),
++                    ) == crate::server::socket_paths::client_socket_path(),
++                boot_id: snapshot.map(|s| s.boot_id.clone()).unwrap_or_default(),
++                workspace_id: snapshot.and_then(|s| s.focused_workspace_id.clone()),
++                tab_id: snapshot.and_then(|s| s.focused_tab_id.clone()),
++                pane_id: snapshot.and_then(|s| s.focused_pane_id.clone()),
++            },
++        )
++    }
++}
++
++fn sanitize_status_text(value: &str) -> Option<String> {
++    let value: String = value
++        .trim()
++        .chars()
++        .filter(|character| !character.is_control() && !is_unicode_format_control(*character))
++        .take(MAX_TEXT_CHARS)
++        .collect();
++    (!value.is_empty()).then_some(value)
++}
++
++fn is_unicode_format_control(character: char) -> bool {
++    matches!(
++        character,
++        '\u{00ad}'
++            | '\u{0600}'..='\u{0605}'
++            | '\u{061c}'
++            | '\u{06dd}'
++            | '\u{070f}'
++            | '\u{0890}'..='\u{0891}'
++            | '\u{08e2}'
++            | '\u{17b4}'..='\u{17b5}'
++            | '\u{180e}'
++            | '\u{200b}'..='\u{200f}'
++            | '\u{202a}'..='\u{202e}'
++            | '\u{2060}'..='\u{206f}'
++            | '\u{feff}'
++            | '\u{fff9}'..='\u{fffb}'
++            | '\u{110bd}'
++            | '\u{110cd}'
++            | '\u{13430}'..='\u{1343f}'
++            | '\u{1bca0}'..='\u{1bca3}'
++            | '\u{1d173}'..='\u{1d17a}'
++            | '\u{e0001}'
++            | '\u{e0020}'..='\u{e007f}'
++    )
++}
++
++fn command_output_text(output: &[u8]) -> Option<String> {
++    let output = String::from_utf8_lossy(output);
++    let output = strip_terminal_control_sequences(output.as_bytes());
++    let output = String::from_utf8_lossy(&output);
++    output.lines().next_back().and_then(sanitize_status_text)
++}
++
++#[derive(Clone, Copy)]
++enum ControlSequenceState {
++    Text,
++    Escape,
++    EscapeIntermediate,
++    Csi,
++    Osc,
++    StString,
++}
++
++fn strip_terminal_control_sequences(value: &[u8]) -> Vec<u8> {
++    use ControlSequenceState::*;
++
++    let mut output = Vec::with_capacity(value.len());
++    let mut state = Text;
++    for &byte in value {
++        state = match (state, byte) {
++            (Text, b'\x1b') => Escape,
++            (Text, _) => {
++                output.push(byte);
++                Text
++            }
++            (Escape, b'[') => Csi,
++            (Escape, b']') => Osc,
++            (Escape, b'P' | b'X' | b'^' | b'_') => StString,
++            (Escape, 0x20..=0x2f) => EscapeIntermediate,
++            (Escape, 0x30..=0x7e) => Text,
++            (Escape, b'\x1b') => Escape,
++            (Escape, b'\x18' | b'\x1a') => Text,
++            (Escape, byte) if byte.is_ascii_control() => Escape,
++            (Escape, _) => {
++                output.push(byte);
++                Text
++            }
++            (EscapeIntermediate, 0x20..=0x2f) => EscapeIntermediate,
++            (EscapeIntermediate, 0x30..=0x7e) => Text,
++            (EscapeIntermediate, b'\x1b') => Escape,
++            (EscapeIntermediate, b'\x18' | b'\x1a') => Text,
++            (EscapeIntermediate, byte) if byte.is_ascii_control() => EscapeIntermediate,
++            (EscapeIntermediate, _) => {
++                output.push(byte);
++                Text
++            }
++            (Csi, 0x20..=0x3f) => Csi,
++            (Csi, 0x40..=0x7e) => Text,
++            (Csi, b'\x1b') => Escape,
++            (Csi, b'\x18' | b'\x1a') => Text,
++            (Csi, byte) if byte.is_ascii_control() => Csi,
++            (Csi, _) => {
++                output.push(byte);
++                Text
++            }
++            (Osc, b'\x07') => Text,
++            (Osc, b'\x1b') => Escape,
++            (Osc, b'\x18' | b'\x1a') => Text,
++            (Osc, _) => Osc,
++            (StString, b'\x1b') => Escape,
++            (StString, b'\x18' | b'\x1a') => Text,
++            (StString, _) => StString,
++        };
++    }
++    output
++}
++
++async fn read_last_output_line(
++    mut stdout: tokio::process::ChildStdout,
++) -> std::io::Result<Vec<u8>> {
++    let mut current_line = Vec::new();
++    let mut last_line = Vec::new();
++    let mut ended_with_newline = false;
++    let mut buffer = [0_u8; 1024];
++
++    loop {
++        let count = stdout.read(&mut buffer).await?;
++        if count == 0 {
++            break;
++        }
++        for &byte in &buffer[..count] {
++            if byte == b'\n' {
++                last_line = std::mem::take(&mut current_line);
++                ended_with_newline = true;
++            } else {
++                if current_line.len() < MAX_COMMAND_LINE_BYTES {
++                    current_line.push(byte);
++                }
++                ended_with_newline = false;
++            }
++        }
++    }
++
++    Ok(if ended_with_newline {
++        last_line
++    } else {
++        current_line
++    })
++}
++
++struct StatusCommandControl {
++    terminated: AtomicBool,
++    process_group: Mutex<Option<crate::platform::StatusCommandGuard>>,
++}
++
++impl StatusCommandControl {
++    fn is_terminated(&self) -> bool {
++        self.terminated.load(Ordering::Acquire)
++    }
++
++    fn terminate(&self) {
++        self.terminated.store(true, Ordering::Release);
++        if let Some(mut process_group) = self
++            .process_group
++            .lock()
++            .unwrap_or_else(|error| error.into_inner())
++            .take()
++        {
++            process_group.terminate();
++        }
++    }
++
++    fn register(&self, mut process_group: crate::platform::StatusCommandGuard) {
++        let mut registered = self
++            .process_group
++            .lock()
++            .unwrap_or_else(|error| error.into_inner());
++        if self.is_terminated() {
++            process_group.terminate();
++        } else {
++            *registered = Some(process_group);
++        }
++    }
++}
++
++async fn run_status_command(
++    control: &StatusCommandControl,
++    command: String,
++    timeout: Duration,
++    deadline: tokio::time::Instant,
++    environment: Vec<(String, String)>,
++    cwd: Option<std::path::PathBuf>,
++) -> Result<Option<String>, String> {
++    if control.is_terminated() || tokio::time::Instant::now() >= deadline {
++        return Err(format!("timed out after {}s", timeout.as_secs()));
++    }
++
++    let mut process = crate::platform::detached_custom_command_process(&command);
++    process
++        .stdin(Stdio::null())
++        .stdout(Stdio::piped())
++        .stderr(Stdio::null())
++        .env_remove("HERDR_ACTIVE_WORKSPACE_ID")
++        .env_remove("HERDR_ACTIVE_TAB_ID")
++        .env_remove("HERDR_ACTIVE_PANE_ID")
++        .env_remove("HERDR_ACTIVE_PANE_CWD")
++        .env_remove("HERDR_PLUGIN_CONTEXT_JSON")
++        .envs(environment);
++    if let Some(cwd) = cwd {
++        process.current_dir(cwd);
++    }
++    crate::platform::configure_status_command(&mut process);
++
++    let mut process = tokio::process::Command::from(process);
++    process.kill_on_drop(true);
++    let mut child = process.spawn().map_err(|error| error.to_string())?;
++    let process_group =
++        crate::platform::StatusCommandGuard::new(&child).map_err(|error| error.to_string())?;
++    control.register(process_group);
++    if control.is_terminated() {
++        return Err("status command was cancelled".into());
++    }
++
++    let operation = async {
++        let stdout = child.stdout.take();
++        let read_output = async {
++            let Some(stdout) = stdout else {
++                return std::io::Result::Ok(Vec::new());
++            };
++            read_last_output_line(stdout).await
++        };
++        let (status, output) = tokio::join!(child.wait(), read_output);
++        let status = status.map_err(|error| error.to_string())?;
++        let output = output.map_err(|error| error.to_string())?;
++        if status.success() {
++            Ok(command_output_text(&output))
++        } else {
++            Err(format!("exited with {status}"))
++        }
++    };
++    match tokio::time::timeout_at(deadline, operation).await {
++        Ok(result) => result,
++        Err(_) => Err(format!("timed out after {}s", timeout.as_secs())),
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    fn context() -> FooterContext {
++        FooterContext {
++            width: 120,
++            local: true,
++            boot_id: "boot".into(),
++            workspace_id: Some("w1".into()),
++            tab_id: Some("t1".into()),
++            pane_id: Some("p1".into()),
++        }
++    }
++    fn command(text: &str, interval: u64, timeout: u64) -> FooterEntryConfig {
++        FooterEntryConfig::Command {
++            command: text.into(),
++            interval_seconds: interval,
++            timeout_seconds: timeout,
++        }
++    }
++    #[test]
++    fn literal_footer_is_sanitized_bounded_and_has_no_eighty_character_cap() {
++        let text = "x".repeat(180);
++        let runtime = FooterRuntime::new(&[FooterEntryConfig::Text {
++            text: format!("{}\r\n\u{202e}", text),
++        }]);
++        assert_eq!(runtime.texts().collect::<String>(), text);
++        assert_eq!(
++            sanitize_status_text(&"x".repeat(10_000)).unwrap().len(),
++            MAX_TEXT_CHARS
++        );
++    }
++    #[test]
++    fn footer_render_clips_wide_unicode_without_touching_other_rows() {
++        let runtime = FooterRuntime::new(&[FooterEntryConfig::Text {
++            text: "界界abc".into(),
++        }]);
++        let palette =
++            super::super::ClientShellConfig::from_config(&crate::config::Config::default()).palette;
++        let mut buffer = super::super::Buffer::empty(super::super::Rect::new(0, 0, 4, 2));
++        render_footer(
++            &mut buffer,
++            super::super::Rect::new(0, 1, 4, 1),
++            &runtime,
++            " · ",
++            &palette,
++            true,
++        );
++        assert!((0..4).all(|x| buffer.cell((x, 0)).unwrap().symbol() == " "));
++        assert_eq!(buffer.cell((0, 1)).unwrap().symbol(), "界");
++        assert_eq!(buffer.cell((2, 1)).unwrap().symbol(), "界");
++    }
++    #[test]
++    fn entry_limit_and_invalid_commands_are_bounded() {
++        let mut entries = vec![command("", 0, 0)];
++        entries.extend((0..50).map(|_| FooterEntryConfig::Text { text: "x".into() }));
++        let runtime = FooterRuntime::new(&entries);
++        assert_eq!(runtime.entries.len(), MAX_FOOTER_ENTRIES - 1);
++    }
++    #[test]
++    fn selected_client_context_has_width_config_and_exact_ids() {
++        let environment: std::collections::HashMap<_, _> =
++            context().environment().into_iter().collect();
++        assert_eq!(environment["HERDR_FOOTER_WIDTH"], "120");
++        assert_eq!(environment["HERDR_FOOTER_LOCAL"], "1");
++        assert_eq!(environment["HERDR_ACTIVE_PANE_ID"], "p1");
++        assert_eq!(
++            environment[crate::config::CONFIG_PATH_ENV_VAR],
++            crate::config::config_path().display().to_string()
++        );
++        assert_eq!(
++            environment[crate::api::SOCKET_PATH_ENV_VAR],
++            crate::api::socket_path().display().to_string()
++        );
++    }
++    #[tokio::test]
++    async fn remote_or_disconnected_context_never_launches_a_local_command() {
++        let mut runtime = FooterRuntime::new(&[command("echo unexpected", 1, 1)]);
++        let mut remote = context();
++        remote.local = false;
++        runtime.tick(Instant::now(), remote);
++        assert!(runtime.entries[0].task.is_none());
++        assert_eq!(runtime.texts().count(), 0);
++    }
++    #[test]
++    fn stale_completions_cannot_replace_new_context_or_reload_text() {
++        let mut runtime = FooterRuntime::new(&[command("echo old", 5, 1)]);
++        let mut remote = context();
++        remote.local = false;
++        runtime.tick(Instant::now(), remote.clone());
++        let generation = runtime.generation;
++        runtime
++            .tx
++            .try_send(Completion {
++                generation,
++                index: 0,
++                output: Ok(Some("wrong target".into())),
++            })
++            .unwrap();
++        remote.pane_id = Some("p2".into());
++        runtime.tick(Instant::now(), remote);
++        assert_eq!(runtime.texts().count(), 0);
++        runtime.configure(&[FooterEntryConfig::Text {
++            text: "fresh".into(),
++        }]);
++        assert_eq!(runtime.texts().collect::<String>(), "fresh");
++    }
++    #[cfg(any(target_os = "linux", target_os = "macos"))]
++    #[tokio::test]
++    async fn commands_capture_last_line_strip_terminal_controls_and_clear_failures() {
++        let mut runtime =
++            FooterRuntime::new(&[command("printf 'old\\n\\033[31mfinal\\033[0m\\n'", 60, 2)]);
++        let ctx = context();
++        runtime.tick(Instant::now(), ctx.clone());
++        for _ in 0..200 {
++            tokio::time::sleep(Duration::from_millis(10)).await;
++            runtime.tick(Instant::now(), ctx.clone());
++            if runtime.entries[0].task.is_none() {
++                break;
++            }
++        }
++        assert_eq!(runtime.texts().collect::<String>(), "final");
++        runtime.entries[0].config = command("exit 2", 60, 2);
++        runtime.entries[0].next_run = Instant::now();
++        runtime.tick(Instant::now(), ctx.clone());
++        for _ in 0..200 {
++            tokio::time::sleep(Duration::from_millis(10)).await;
++            runtime.tick(Instant::now(), ctx.clone());
++            if runtime.entries[0].task.is_none() {
++                break;
++            }
++        }
++        assert_eq!(runtime.texts().count(), 0);
++    }
++    #[cfg(any(target_os = "linux", target_os = "macos"))]
++    #[tokio::test]
++    async fn timeout_is_bounded_and_repeated_ticks_do_not_overlap() {
++        let mut runtime = FooterRuntime::new(&[command("sleep 30", 60, 1)]);
++        let ctx = context();
++        let start = Instant::now();
++        runtime.tick(start, ctx.clone());
++        let control = runtime.entries[0].task.as_ref().unwrap().control.clone();
++        runtime.tick(start + Duration::from_millis(500), ctx.clone());
++        assert!(Arc::ptr_eq(
++            &control,
++            &runtime.entries[0].task.as_ref().unwrap().control
++        ));
++        tokio::time::sleep(Duration::from_millis(1150)).await;
++        runtime.tick(Instant::now(), ctx);
++        assert!(runtime.entries[0].task.is_none());
++        assert!(control.is_terminated());
++        assert!(control.process_group.lock().unwrap().is_none());
++    }
++    #[cfg(any(target_os = "linux", target_os = "macos"))]
++    #[tokio::test]
++    async fn reload_and_client_drop_synchronously_cancel_command_groups() {
++        let mut runtime = FooterRuntime::new(&[command("sleep 30", 60, 60)]);
++        runtime.tick(Instant::now(), context());
++        let control = runtime.entries[0].task.as_ref().unwrap().control.clone();
++        tokio::time::sleep(Duration::from_millis(50)).await;
++        assert!(control.process_group.lock().unwrap().is_some());
++        runtime.configure(&[]);
++        assert!(control.is_terminated());
++        assert!(control.process_group.lock().unwrap().is_none());
++        runtime.configure(&[command("sleep 30", 60, 60)]);
++        runtime.tick(Instant::now(), context());
++        let control = runtime.entries[0].task.as_ref().unwrap().control.clone();
++        drop(runtime);
++        assert!(control.is_terminated());
++    }
++    #[test]
++    fn commands_can_be_masked_without_hiding_literal_entries() {
++        let mut runtime = FooterRuntime::new(&[
++            FooterEntryConfig::Text {
++                text: "literal".into(),
++            },
++            command("helper", 5, 1),
++        ]);
++        runtime.entries[1].text = Some("old local target".into());
++        assert_eq!(
++            runtime.visible_texts(false).collect::<Vec<_>>(),
++            vec!["literal"]
++        );
++    }
++    #[cfg(any(target_os = "linux", target_os = "macos"))]
++    #[tokio::test(flavor = "current_thread")]
++    async fn cancelling_reload_or_drop_prevents_a_real_descendant_from_running() {
++        for drop_client in [false, true] {
++            let stamp = std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos();
++            let directory = std::env::temp_dir()
++                .join(format!("herdr-footer-child-{}-{stamp}", std::process::id()));
++            std::fs::create_dir(&directory).unwrap();
++            let started = directory.join("started");
++            let survived = directory.join("survived");
++            let shell = format!(
++                "(printf started > '{}'; sleep 0.3; printf survived > '{}') & wait",
++                started.display(),
++                survived.display()
++            );
++            let mut runtime = FooterRuntime::new(&[command(&shell, 60, 60)]);
++            runtime.tick(Instant::now(), context());
++            for _ in 0..100 {
++                if started.exists() {
++                    break;
++                }
++                tokio::time::sleep(Duration::from_millis(10)).await;
++            }
++            let did_start = started.exists();
++            if drop_client {
++                drop(runtime);
++            } else {
++                runtime.configure(&[]);
++            }
++            // Block scheduling to prove group termination is synchronous, not
++            // merely deferred until the async task observes cancellation.
++            std::thread::sleep(Duration::from_millis(400));
++            let did_survive = survived.exists();
++            let _ = std::fs::remove_dir_all(&directory);
++            assert!(did_start, "private fixture descendant did not start");
++            assert!(!did_survive, "cancelled footer descendant survived");
++        }
++    }
++}
+diff --git a/src/client/shell/state.rs b/src/client/shell/state.rs
+index c170c9b..0012f0f 100644
+--- a/src/client/shell/state.rs
++++ b/src/client/shell/state.rs
+@@ -20,6 +20,8 @@ pub(crate) struct ClientShellConfig {
+     pub(super) sidebar_collapsed_mode: SidebarCollapsedModeConfig,
+     pub(super) mobile_width_threshold: u16,
+     pub(super) tab_bar_position: TabBarPositionConfig,
++    pub(super) footer: Vec<crate::config::FooterEntryConfig>,
++    pub(super) footer_separator: String,
+     pub(super) hide_tab_bar_when_single_tab: bool,
+     pub(super) spaces: SpacesSidebarConfig,
+     pub(super) agents: crate::config::AgentsSidebarConfig,
+@@ -59,6 +61,7 @@ pub(super) struct ClientShellLayout {
+     pub tab_bar: Rect,
+     pub mobile_header: Rect,
+     pub pane_surface: Rect,
++    pub footer: Rect,
+ }
+
+ #[derive(Debug, Clone, PartialEq, Eq)]
+@@ -846,6 +849,7 @@ pub(super) struct ClientCopyModeState {
+ pub(crate) struct ClientShellState {
+     pub(super) machine_diagnostics: super::machine_diagnostics::MachineDiagnostics,
+     pub(super) config: ClientShellConfig,
++    pub(super) footer: super::footer::FooterRuntime,
+     pub(super) snapshot: Option<Box<ClientShellSnapshot>>,
+     pub(super) active_snapshot_generation: Option<u64>,
+     pub(super) pane_surface_generation: Option<u64>,
+@@ -1009,6 +1013,7 @@ impl ClientShellState {
+         }
+         Self {
+             machine_diagnostics: Default::default(),
++            footer: super::footer::FooterRuntime::new(&config.footer),
+             config,
+             snapshot: None,
+             active_snapshot_generation: None,
+diff --git a/src/client/shell/tests/footer.rs b/src/client/shell/tests/footer.rs
+new file mode 100644
+index 0000000..1e0c58b
+--- /dev/null
++++ b/src/client/shell/tests/footer.rs
+@@ -0,0 +1,155 @@
++use super::*;
++use crate::config::FooterEntryConfig;
++fn config_with_footer() -> ClientShellConfig {
++    let mut config = Config::default();
++    config.ui.footer = vec![FooterEntryConfig::Text {
++        text: "Super+Alt M Menu · T Tab · Z Zoom".into(),
++    }];
++    ClientShellConfig::from_config(&config)
++}
++#[test]
++fn separate_footer_keeps_top_tabs_and_reduces_sidebar_and_surface_once() {
++    let normal = ClientShellConfig::from_config(&Config::default()).layout(120, 24, false, 2, 26);
++    let footer = config_with_footer().layout(120, 24, false, 2, 26);
++    assert_eq!(footer.footer, Rect::new(0, 23, 120, 1));
++    assert_eq!(footer.tab_bar, normal.tab_bar);
++    assert_eq!(footer.pane_surface.height, normal.pane_surface.height - 1);
++    assert_eq!(footer.sidebar.height, normal.sidebar.height - 1);
++    assert_eq!(footer.pane_surface.bottom(), footer.footer.y);
++}
++#[test]
++fn footer_survives_single_tab_hiding_and_stays_outside_bottom_tabs() {
++    let mut config = config_with_footer();
++    config.hide_tab_bar_when_single_tab = true;
++    let layout = config.layout(120, 24, false, 1, 26);
++    assert!(layout.tab_bar.is_empty());
++    assert_eq!(layout.footer.height, 1);
++    config.hide_tab_bar_when_single_tab = false;
++    config.tab_bar_position = TabBarPositionConfig::Bottom;
++    let layout = config.layout(120, 24, false, 2, 26);
++    assert_eq!(layout.tab_bar.bottom(), layout.footer.y);
++    assert_eq!(layout.pane_surface.bottom(), layout.tab_bar.y);
++}
++#[test]
++fn footer_geometry_is_bounded_in_mobile_and_tiny_windows() {
++    let config = config_with_footer();
++    for cols in [0, 1, 40, 120] {
++        for rows in 0..6 {
++            let layout = config.layout(cols, rows, false, 2, 26);
++            assert!(layout.footer.bottom() <= rows);
++            assert!(layout.pane_surface.bottom() <= rows);
++            assert!(layout.sidebar.bottom() <= layout.footer.y);
++            assert!(layout.footer.height <= 1);
++            if rows <= 1 {
++                assert!(layout.footer.is_empty());
++            }
++        }
++    }
++    let layout = config.layout(40, 10, false, 2, 26);
++    assert_eq!(layout.footer, Rect::new(0, 9, 40, 1));
++    assert_eq!(layout.mobile_header.height, 2);
++    assert_eq!(layout.pane_surface.height, 7);
++}
++#[test]
++fn normal_footer_is_themed_has_no_hits_and_never_becomes_a_pane() {
++    let mut state = ClientShellState::new(config_with_footer());
++    state.set_snapshot(Box::new(snapshot()));
++    state.set_pane_surface(surface());
++    let frame = state.compose(120, 24).unwrap();
++    assert!(frame_rows(&frame)[23].starts_with("Super+Alt M Menu"));
++    let layout = state.layout(120, 24);
++    assert_eq!(state.snapshot.as_ref().unwrap().panes.len(), 1);
++    assert_eq!(state.hits.panes.len(), 1);
++    assert!(state
++        .hits
++        .panes
++        .iter()
++        .all(|p| p.rect.bottom() <= layout.footer.y));
++    for column in [0, 26, 80, 119] {
++        let output = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
++            kind: MouseEventKind::Down(MouseButton::Left),
++            column,
++            row: 23,
++            modifiers: KeyModifiers::empty(),
++        })]);
++        assert!(output.actions.is_empty());
++        assert!(output.requests.is_empty());
++    }
++    assert_eq!(
++        frame.cells[23 * 120].bg,
++        crate::protocol::color_to_u32(state.config.palette.panel_bg)
++    );
++}
++#[test]
++fn footer_reserves_same_row_while_command_has_no_output() {
++    let mut config = config_with_footer();
++    config.footer = vec![FooterEntryConfig::Command {
++        command: "helper".into(),
++        interval_seconds: 5,
++        timeout_seconds: 2,
++    }];
++    let mut state = ClientShellState::new(config);
++    let before = state.surface_size(120, 24);
++    state.footer.configure(&state.config.footer);
++    assert_eq!(state.surface_size(120, 24), before);
++}
++
++#[test]
++fn mode_bars_and_mobile_switcher_do_not_overwrite_footer() {
++    for width in [44, 120] {
++        for mode in [
++            ClientShellMode::Prefix,
++            ClientShellMode::Navigate,
++            ClientShellMode::Copy,
++            ClientShellMode::Resize,
++        ] {
++            let mut state = ClientShellState::new(config_with_footer());
++            state.set_snapshot(Box::new(snapshot()));
++            state.set_pane_surface(surface());
++            state.mode = mode;
++            let frame = state.compose(width, 24).unwrap();
++            assert!(
++                frame_rows(&frame)[23].starts_with("Super+Alt M Menu"),
++                "footer obscured at {width} columns in {mode:?}"
++            );
++        }
++    }
++}
++#[test]
++fn bottom_notification_is_above_footer_in_both_layouts() {
++    for width in [44, 120] {
++        let mut state = ClientShellState::new(config_with_footer());
++        state.set_snapshot(Box::new(snapshot()));
++        state.set_pane_surface(surface());
++        state.visible_notification = Some(ClientVisibleNotification {
++            endpoint_id: ClientEndpointId::Local,
++            event: SemanticNotification {
++                kind: SemanticNotificationKind::Custom,
++                title: "notification".into(),
++                body: None,
++                sound: None,
++                agent: None,
++                workspace_id: None,
++                tab_id: None,
++                pane_id: None,
++                position: Some(crate::config::ToastHerdrPosition::BottomRight),
++            },
++            deadline: std::time::Instant::now() + std::time::Duration::from_secs(10),
++        });
++        let frame = state.compose(width, 24).unwrap();
++        assert!(frame_rows(&frame)[23].starts_with("Super+Alt M Menu"));
++        assert!(state.hits.notification_toast.bottom() <= 23);
++    }
++}
++#[test]
++fn empty_footer_preserves_existing_desktop_and_mobile_layouts() {
++    let config = ClientShellConfig::from_config(&Config::default());
++    let desktop = config.layout(120, 24, false, 2, 26);
++    assert!(desktop.footer.is_empty());
++    assert_eq!(desktop.sidebar, Rect::new(0, 0, 26, 24));
++    assert_eq!(desktop.tab_bar, Rect::new(26, 0, 94, 1));
++    assert_eq!(desktop.pane_surface, Rect::new(26, 1, 94, 23));
++    let mobile = config.layout(40, 1, false, 2, 26);
++    assert_eq!(mobile.mobile_header, Rect::new(0, 0, 40, 1));
++    assert!(mobile.footer.is_empty());
++}
+diff --git a/src/client/shell/tests/mod.rs b/src/client/shell/tests/mod.rs
+index 9d96014..c3f750a 100644
+--- a/src/client/shell/tests/mod.rs
++++ b/src/client/shell/tests/mod.rs
+@@ -5,6 +5,7 @@ use crate::protocol::{
+     PaneSurfaceSplit, PaneSurfaceSplitDirection, SurfaceRect,
+ };
+ use crossterm::event::MouseEvent;
++mod footer;
+ mod text_editing;
+
+ pub(super) fn snapshot() -> ClientShellSnapshot {
+diff --git a/src/config.rs b/src/config.rs
+index 8550097..f330af5 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -1,5 +1,6 @@
+ use crossterm::event::{KeyCode, KeyModifiers};
+
++mod footer;
+ mod io;
+ mod keybinds;
+ mod model;
+@@ -11,6 +12,7 @@ mod window_title;
+ mod write;
+
+ pub use self::{
++    footer::FooterEntryConfig,
+     io::{
+         config_diagnostic_summary, config_dir, config_path, load_live_config,
+         remove_keybinding_config_sections, remove_section_key, state_dir, upsert_section_bool,
+@@ -38,6 +40,7 @@ pub use self::{
+     window_title::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken},
+ };
+
++pub(crate) use self::footer::{footer_diagnostics, MAX_FOOTER_ENTRIES};
+ pub(crate) use self::keybinds::parse_key_combo;
+ pub(crate) use self::write::{update_file_at, write_edit, ConfigEdit};
+ pub(crate) use self::{
+@@ -120,6 +123,7 @@ impl Config {
+             .chain(self.theme.diagnostics())
+             .chain(self.ui.sound.diagnostics())
+             .chain(tab_bar_right_diagnostics(&self.ui.tab_bar_right))
++            .chain(footer_diagnostics(&self.ui.footer))
+             .chain(window_title_diagnostics(&self.ui.window_title))
+             .chain(self.invalid_sidebar_bounds_diagnostic())
+             .chain(self.invalid_headless_size_diagnostic())
+diff --git a/src/config/footer.rs b/src/config/footer.rs
+new file mode 100644
+index 0000000..986f2b5
+--- /dev/null
++++ b/src/config/footer.rs
+@@ -0,0 +1,85 @@
++use serde::{Deserialize, Serialize};
++
++pub(crate) const MAX_FOOTER_ENTRIES: usize = 16;
++
++fn default_interval() -> u64 {
++    5
++}
++fn default_timeout() -> u64 {
++    2
++}
++
++/// Client-local presentation entries; these never enter an endpoint codec.
++#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
++#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
++pub enum FooterEntryConfig {
++    Text {
++        text: String,
++    },
++    Command {
++        command: String,
++        #[serde(default = "default_interval")]
++        interval_seconds: u64,
++        #[serde(default = "default_timeout")]
++        timeout_seconds: u64,
++    },
++}
++
++pub(crate) fn footer_diagnostics(entries: &[FooterEntryConfig]) -> Vec<String> {
++    let mut diagnostics = Vec::new();
++    if entries.len() > MAX_FOOTER_ENTRIES {
++        diagnostics.push(format!(
++            "ui.footer may contain at most {MAX_FOOTER_ENTRIES} entries; ignoring extras"
++        ));
++    }
++    for (index, entry) in entries.iter().enumerate().take(MAX_FOOTER_ENTRIES) {
++        if let FooterEntryConfig::Command {
++            command,
++            interval_seconds,
++            timeout_seconds,
++        } = entry
++        {
++            if command.trim().is_empty()
++                || !(1..=31_536_000).contains(interval_seconds)
++                || !(1..=3_600).contains(timeout_seconds)
++            {
++                diagnostics.push(format!("ui.footer[{index}] command requires nonempty text, interval_seconds 1–31536000, timeout_seconds 1–3600; hiding entry"));
++            }
++        }
++    }
++    diagnostics
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn parse_footer_defaults_and_reject_unknown_fields() {
++        let config: crate::config::Config = toml::from_str(
++            "[ui]\nfooter = [{type='command', command='helper'}, {type='text',text='Hints'}]",
++        )
++        .unwrap();
++        assert!(matches!(
++            config.ui.footer[0],
++            FooterEntryConfig::Command {
++                interval_seconds: 5,
++                timeout_seconds: 2,
++                ..
++            }
++        ));
++        assert!(toml::from_str::<crate::config::Config>(
++            "[ui]\nfooter = [{type='text',text='Hints',anchor='bottom'}]"
++        )
++        .is_err());
++        assert!(crate::config::Config::default().ui.footer.is_empty());
++    }
++    #[test]
++    fn invalid_footer_commands_report_without_mutating_configuration() {
++        let entries = vec![FooterEntryConfig::Command {
++            command: "".into(),
++            interval_seconds: 0,
++            timeout_seconds: 4_000,
++        }];
++        assert_eq!(footer_diagnostics(&entries).len(), 1);
++    }
++}
+diff --git a/src/config/model.rs b/src/config/model.rs
+index 0e2e57c..1c978d1 100644
+--- a/src/config/model.rs
++++ b/src/config/model.rs
+@@ -4,9 +4,9 @@ use crossterm::event::KeyModifiers;
+ use serde::{de, Deserialize, Deserializer, Serialize};
+
+ use super::{
+-    ActionKeybinds, BindingConfig, CommandKeybindConfig, IndexedKeybind, Keybinds, SidebarConfig,
+-    SoundConfig, TabBarRightEntryConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD,
+-    DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
++    ActionKeybinds, BindingConfig, CommandKeybindConfig, FooterEntryConfig, IndexedKeybind,
++    Keybinds, SidebarConfig, SoundConfig, TabBarRightEntryConfig, ThemeConfig,
++    DEFAULT_MOBILE_WIDTH_THRESHOLD, DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
+ };
+
+ pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
+@@ -988,6 +988,10 @@ pub struct UiConfig {
+     pub tab_bar_right: Vec<TabBarRightEntryConfig>,
+     /// Text inserted between visible right-side tab bar entries. Default: one space.
+     pub tab_bar_right_separator: String,
++    /// Client-local entries in a separate full-width single-row footer. Empty disables it.
++    pub footer: Vec<FooterEntryConfig>,
++    /// Text between visible client-local footer entries.
++    pub footer_separator: String,
+     /// Format for the outer terminal window title. Empty leaves the title alone.
+     /// Default: "{hostname}: {workspace}".
+     pub window_title: String,
+@@ -1219,6 +1223,8 @@ impl Default for UiConfig {
+             tab_bar_position: TabBarPositionConfig::Top,
+             tab_bar_right: Vec::new(),
+             tab_bar_right_separator: " ".into(),
++            footer: Vec::new(),
++            footer_separator: " · ".into(),
+             window_title: super::window_title::default_window_title(),
+             agent_panel_sort: AgentPanelSortConfig::Spaces,
+             _legacy_agent_panel_scope: None,
+diff --git a/src/main.rs b/src/main.rs
+index 45a6409..9c9771e 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -319,6 +319,13 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
+ # tab_bar_right = []
+ # tab_bar_right_separator = " "
+
++# Separate full-window client-local footer. Keeps tab placement unchanged.
++# Supported types: text and command. Commands run only on the Local client.
++# Each command receives HERDR_FOOTER_WIDTH, runs without blocking input, and has a timeout.
++# Example: [{ type = "command", command = "herdr-shell footer", interval_seconds = 5, timeout_seconds = 2 }]
++# footer = []
++# footer_separator = " · "
++
+ # Title Herdr writes to the terminal it runs in, which is what window managers
+ # show in title, tab, and group bars. Tokens are {hostname}, {workspace}, {tab},
+ # {pane}, and {terminal_title}; {{ and }} are literal braces.
+@@ -537,7 +544,13 @@ fn main() -> io::Result<()> {
+         && !args.iter().any(|a| {
+             matches!(
+                 a.as_str(),
+-                "--help" | "-h" | "--version" | "-V" | "--default-config" | "--skill"
++                "--help"
++                    | "-h"
++                    | "--version"
++                    | "-V"
++                    | "--default-config"
++                    | "--client-capabilities"
++                    | "--skill"
+             )
+         })
+     {
+@@ -700,6 +713,7 @@ fn main() -> io::Result<()> {
+         println!("                      Keybindings for --remote app attach (default: local)");
+         println!("  --handoff           Opt into live handoff for update or remote attach");
+         println!("  --default-config    Print default configuration and exit");
++        println!("  --client-capabilities  Print client capability versions as JSON and exit");
+         println!("  --skill             Print the agent skill file and exit");
+         println!("  --version, -V       Print version and exit");
+         println!("  --help, -h          Show this help");
+@@ -719,6 +733,12 @@ fn main() -> io::Result<()> {
+         return Ok(());
+     }
+
++    if args.iter().any(|a| a == "--client-capabilities") {
++        platform::begin_cli_output();
++        println!("{}", serde_json::json!({"footer": 1}));
++        return Ok(());
++    }
++
+     if args.iter().any(|a| a == "--default-config") {
+         platform::begin_cli_output();
+         print!("{DEFAULT_CONFIG}");
+@@ -740,6 +760,7 @@ fn main() -> io::Result<()> {
+         "--version",
+         "-V",
+         "--default-config",
++        "--client-capabilities",
+         "--skill",
+         "--help",
+         "-h",

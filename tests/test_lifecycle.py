@@ -10,7 +10,7 @@ import tomllib
 import unittest
 from unittest.mock import Mock, patch
 
-from herdr_shell import PLUGIN_ID, config, lifecycle
+from herdr_shell import PLUGIN_ID, config, lifecycle, footer_setup
 from herdr_shell.runtime import ShellError
 
 
@@ -445,6 +445,17 @@ class LifecycleTests(unittest.TestCase):
              patch.object(lifecycle.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="", stderr="manifest invalid")):
             with self.assertRaisesRegex(ShellError, "Git was updated.*update --local --apply.*manifest invalid"):
                 lifecycle.update(self.args(local=False), self.store, Mock())
+
+    def test_remove_cleans_exact_provider_and_preserves_personal_footer_entries(self):
+        entry = {"type": "command", "command": footer_setup.provider_command(self.root),
+                 "interval_seconds": 19, "timeout_seconds": 7}
+        personal = {"type": "text", "text": "My status"}
+        self.store.apply(self.store.prepare([(["ui", "footer"], [entry, personal]),
+                                            (["ui", "tab_bar_position"], "top")]))
+        self.remove()
+        ui = tomllib.loads(self.path.read_text())["ui"]
+        self.assertEqual(ui["footer"], [personal])
+        self.assertEqual(ui["tab_bar_position"], "top")
 
 
 if __name__ == "__main__":

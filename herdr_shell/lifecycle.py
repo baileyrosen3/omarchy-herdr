@@ -4,7 +4,7 @@ import subprocess
 import sys
 import tomllib
 
-from . import PLUGIN_ID, desktop
+from . import PLUGIN_ID, desktop, footer_setup
 from .config import MISSING, command_id
 from .runtime import Client, ShellError, resolve_socket
 
@@ -110,13 +110,15 @@ def update(args, store, install_callback):
 
 
 def _removal_proposal(store):
-    doc = tomllib.loads(store.read())
+    before = store.read()
+    doc = tomllib.loads(before)
     commands = doc.get("keys", {}).get("command", [])
     changes = [(["keys", "command", "@" + command_id(command)], MISSING)
                for command in commands if command.get("type") == "plugin_action"
                and isinstance(command.get("command"), str)
                and command["command"].startswith(PLUGIN_ID + ".")]
-    return store.prepare(changes)
+    changes += footer_setup.changes(before, ROOT, remove=True)
+    return store.prepare(changes, before)
 
 
 def remove(args, store):

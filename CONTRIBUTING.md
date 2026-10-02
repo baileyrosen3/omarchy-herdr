@@ -135,6 +135,13 @@ Omarchy stub on the disposable server's PATH; V runs Lazygit in a temporary Git
 repository; Q/Shift+Q use reports belonging only to that server. These cases do
 not launch your configured agent or use a working project.
 
+Footer work has two verification boundaries: `tests/test_footer.py` and
+`tests/test_footer_setup.py` check the provider and owned configuration lifecycle;
+[Footer support](docs/footer.md) documents the separate native extension. The
+plugin must never infer footer support from a version number or a successful
+unknown-field config check. Native compile/render/process tests require an
+isolated patched Herdr build; provider tests do not prove native rendering.
+
 For desktop behavior, follow the manual guide in a spare pane. Refuse occupied
 chords, including physical-key aliases, and never override desktop bindings.
 Verify the actual foreground client and keep actions pinned to the captured

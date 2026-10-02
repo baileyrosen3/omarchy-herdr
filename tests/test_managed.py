@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from herdr_shell import PLUGIN_ID, config, managed
+from herdr_shell import PLUGIN_ID, config, managed, footer_setup
 from herdr_shell.runtime import ShellError
 
 
@@ -90,6 +90,7 @@ class ManagedTests(unittest.TestCase):
                         patch.object(managed, "_native", self.native),
                         patch.object(managed, "desktop", self.desktop),
                         patch.object(managed, "_reload_servers", self.reload),
+                        patch.object(footer_setup, "supported", return_value=False),
                         patch.object(config, "defaults", return_value={"prefix": "ctrl+space", "focus_pane_left": "ctrl+alt+left"})):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -436,6 +437,64 @@ command="blr.herdr-shell-extra.menu"
         with self.assertRaisesRegex(ShellError, "managed setup state"):
             managed.activate()
         self.assertEqual(self.path.read_text(), BASE)
+
+    def test_footer_is_owned_by_stable_runtime_and_suspends_with_plugin(self):
+        with patch.object(footer_setup, "supported", return_value=True):
+            self.install()
+            entry = tomllib.loads(self.path.read_text())["ui"]["footer"][0]
+            self.assertEqual(entry["command"], footer_setup.provider_command(self.root))
+            managed.deactivate()
+            self.assertNotIn("footer", tomllib.loads(self.path.read_text())["ui"])
+            managed.activate()
+        self.assertEqual(tomllib.loads(self.path.read_text())["ui"]["footer"], [entry])
+
+    def test_capable_footer_activation_failure_restores_all_owned_resources(self):
+        self.reload.side_effect = [ShellError("reload rejected"), {}, {}]
+        with patch.object(footer_setup, "supported", return_value=True):
+            with self.assertRaisesRegex(ShellError, "reload rejected"):
+                managed.activate()
+        self.assertEqual(self.path.read_text(), BASE)
+        self.assertEqual(self.native.plugins, [])
+        self.assertFalse(self.helper.is_symlink())
+        self.assertFalse(self.desktop.installed())
+        self.assertFalse((managed._state() / "setup.json").exists())
+
+    def test_capable_footer_disable_and_remove_reload_failures_restore_provider(self):
+        with patch.object(footer_setup, "supported", return_value=True):
+            self.install()
+        before = self.path.read_text()
+        previous = deepcopy(self.native.plugins)
+        for remove in (False, True):
+            with self.subTest(remove=remove):
+                self.reload.side_effect = [ShellError("reload rejected"), {}, {}]
+                with self.assertRaisesRegex(ShellError, "reload rejected"):
+                    managed.deactivate(remove=remove)
+                self.assertEqual(self.path.read_text(), before)
+                self.assertEqual(self.native.plugins, previous)
+                self.assertTrue(self.helper.is_symlink())
+                self.assertTrue(self.desktop.enabled())
+                self.assertFalse((managed._state() / "suspended.json").exists())
+                self.assertTrue((managed._state() / "setup.json").exists())
+
+    def test_capable_managed_activation_respects_explicit_disabled_footer(self):
+        self.store.apply(self.store.prepare([(["ui", "footer"], [])]))
+        with patch.object(footer_setup, "supported", return_value=True):
+            self.install()
+        self.assertEqual(tomllib.loads(self.path.read_text())["ui"]["footer"], [])
+
+    def test_footer_remove_preserves_later_personal_status_and_header(self):
+        with patch.object(footer_setup, "supported", return_value=True):
+            self.install()
+        entry = tomllib.loads(self.path.read_text())["ui"]["footer"][0]
+        personal = {"type": "text", "text": "My status"}
+        self.store.apply(self.store.prepare([(["ui", "footer"], [entry, personal]),
+                                            (["ui", "tab_bar_position"], "top"),
+                                            (["ui", "footer_separator"], " custom ")]))
+        managed.deactivate(remove=True)
+        ui = tomllib.loads(self.path.read_text())["ui"]
+        self.assertEqual(ui["footer"], [personal])
+        self.assertEqual(ui["tab_bar_position"], "top")
+        self.assertEqual(ui["footer_separator"], " custom ")
 
 
 class OfflineCliTests(unittest.TestCase):

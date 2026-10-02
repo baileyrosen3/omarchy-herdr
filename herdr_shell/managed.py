@@ -17,7 +17,7 @@ import tempfile
 import tomllib
 import uuid
 
-from . import PLUGIN_ID, desktop
+from . import PLUGIN_ID, desktop, footer_setup
 from .config import ConfigStore, MISSING, atomic_write, command_id, shortcut_changes
 from .runtime import ShellError, config_path, run_herdr, state_path
 
@@ -297,7 +297,10 @@ def activate():
         desktop_enabled = suspended.get("desktop_enabled", False) if suspended else desktop.enabled() if had_desktop else True
         store = ConfigStore()
         reserved_shortcuts = []
-        proposal = store.prepare(shortcut_changes(existing=store.read(), reserved=reserved_shortcuts))
+        before = store.read()
+        changes = shortcut_changes(existing=before, reserved=reserved_shortcuts)
+        changes += footer_setup.changes(before, ROOT, enabled=native_enabled)
+        proposal = store.prepare(changes, before)
         if proposal["changes"]:
             store.validator(proposal["after"])
         revision = _revision()
@@ -382,6 +385,7 @@ def deactivate(remove=False):
             changes = [(["keys", "command", "@" + command_id(c)], MISSING) for c in commands
                        if c.get("type") == "plugin_action" and isinstance(c.get("command"), str)
                        and c["command"].startswith(PLUGIN_ID + ".")]
+        changes += footer_setup.changes(before, ROOT, remove=True)
         proposal = store.prepare(changes, before)
         if proposal["changes"]:
             store.validator(proposal["after"])
