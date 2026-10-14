@@ -74,8 +74,7 @@ user workflow uses Omarchy's add/update/remove commands, as shown in the README.
 
 Validate behavior in isolated sessions before installing into your working
 desktop. Report which checks passed and which live interactions remain unverified.
-GitHub Actions runs the unit suite on Python 3.11 and 3.13 and the isolated
-Omarchy lifecycle probe against pinned Herdr 0.9.3.
+GitHub Actions runs the unit suite on Python 3.11 and 3.13, the isolated Omarchy lifecycle probe, and the live and trainer probes against pinned stock Herdr 0.9.3.
 
 To run the checks yourself:
 
@@ -83,6 +82,7 @@ To run the checks yourself:
 python3 -m unittest discover -s tests -v
 python3 tests/probe.py
 python3 tests/trainer_probe.py
+python3 tests/actions_probe.py
 python3 tests/omarchy_probe.py --run
 ```
 
@@ -91,6 +91,16 @@ The live probe requires `tmux` and Herdr. It creates disposable Herdr/tmux
 servers under `/tmp` and drives their menus. Read a live probe before running
 it; do not point it at a working session. Generated captures and results are
 local artifacts and are excluded from version control.
+
+The live, trainer, and action probes share `tests/probe_support.py`. Send terminal
+keys only after its focus helper positively confirms the exact destination's
+bold rendered pane title (and popup absence when needed); the old pane losing
+focus, RPC replies, and server focus snapshots alone do not acknowledge the
+keyboard-input target. The trainer assigns short, unique `Probe <pane_id>` labels
+to disposable non-guide targets whose borders would otherwise be untitled.
+Its isolated config keeps pane borders visible even in single-pane tabs.
+Their JSON results record the resolved Herdr executable path and explicit native
+pane-spacing capability.
 
 The trainer probe exercises the read-only walkthrough, ordered Hands-on, and
 shuffled Speed Run in a temporary plugin copy and real Herdr/curses session.
@@ -103,9 +113,6 @@ status and desktop-focus checks are explicit headless fixtures; the probe
 neither installs a host bridge nor verifies compositor input. Practice agents
 are harmless simulations; Lazygit uses a temporary repository with a labeled
 simulator fallback when unavailable.
-After RPC focus changes, the trainer probe waits for the attached client's
-rendered focus indicator before sending terminal keys. Server focus snapshots
-alone do not acknowledge the client's keyboard-input target.
 Unit timing checks use a controlled monotonic clock so fixture preparation and
 verification cannot count against player reaction time.
 Check that welcome initially offers only the two walkthroughs, completing either
@@ -135,6 +142,41 @@ always checking tab/workspace close protection. It creates no service or
 persistent desktop configuration. If device access is unavailable, report desktop input checks as
 unverified and use the manual guide. Compositor shortcuts must be checked with
 this input fixture; terminal key injection alone does not verify them.
+
+Run the desktop probe only when explicitly authorized: it injects real keys into
+the live compositor, even though its Herdr server and terminal are disposable.
+Before checking shortcuts or creating input devices, it preserves an inherited
+`HYPRLAND_INSTANCE_SIGNATURE` only when that UID-owned control socket answers a
+read-only `hyprctl -i <signature> -j version` request. Otherwise it parses
+`hyprctl -j instances` JSON and selects the sole responding instance for this UID.
+Discovery also sets `WAYLAND_DISPLAY` from that instance's `wl_socket` and reports
+the selected signature/display at startup. Directory names and `instances` alone
+are not liveness checks: even `hyprctl -i <signature> instances` only enumerates
+instances. Multiple live instances without a verified explicit signature cause
+an actionable error instead of a guess; set `HYPRLAND_INSTANCE_SIGNATURE` to the
+intended instance and rerun. No live sockets, malformed JSON, or failed discovery
+also stop the probe before input or configuration changes.
+
+Compositor commands inherit the original environment with only the selected
+signature/display updated. The disposable Herdr environment retains these and
+the desktop profile's original config namespace through
+`HERDR_SHELL_DESKTOP_CONFIG_HOME`, while isolating server/pane variables and its
+own XDG configuration. Discovery does not install, reload, toggle bindings,
+or change socket/device permissions. `python3 -m unittest discover -s tests`
+uses fake hyprctl JSON and temporary socket fixtures, never real compositor
+commands; `import tests.desktop_probe` does not run the probe.
+
+Close-confirmation input additionally waits for the popup's actual refreshed
+curses surface: the matching close title, activity warning, Cancel option, and
+Esc footer must be present while that sole owned popup is awaiting input.
+An `_menu` process and its `HERDR_SHELL_PAGE` environment identify ownership,
+not UI readiness; startup and error dialogs cannot authorize Escape. The probe
+uses a temporary, per-server Python import hook to observe the real popup
+surface and record keys returned by its input reader. Confirmation checks
+require the reader to receive Escape, then verify unchanged pane identities and
+running work. Results include those received keys; failure diagnostics include
+the observed popup text. The hook and observations are removed with the
+disposable fixture, and cleanup never writes desktop preferences.
 
 The full desktop probe includes launch and agent-cycle checks. Add
 `--launches-only` to check only A, V, Q, and Shift+Q after input sanity checks.

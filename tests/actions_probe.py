@@ -15,19 +15,10 @@ from herdr_shell import namer, naming
 from herdr_shell.actions import close_plan, execute, execute_close
 from herdr_shell.rotation import _tree, rotation_unavailable
 from herdr_shell.runtime import Client, Context, ShellError
+from functools import partial
+from probe_support import eventually as wait_until, herdr_details
 
-
-def eventually(predicate, timeout=5):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            result = predicate()
-            if result:
-                return result
-        except ShellError:
-            pass
-        time.sleep(.04)
-    raise AssertionError("Isolated server did not reach expected state")
+eventually = partial(wait_until, timeout=5, interval=.04)
 
 
 def context(client, pane):
@@ -218,7 +209,7 @@ def exercise(root, client):
     assert named_workspace["label"] == root.name, named_workspace
     split = execute("pane-split-right", origin)["pane"]
     assert client.call("pane.get", pane_id=split["pane_id"])["pane"].get("label") is None
-    return {"herdr": client.snapshot()["version"], "passed": [
+    return {"herdr": client.snapshot()["version"], **herdr_details(), "passed": [
         "all four split directions place/focus new terminals correctly; all four directional swaps preserve process identities",
         "rotation preserves pane IDs, terminal IDs, shell and running foreground process IDs, ratios and focus",
         "rotation staging tab closes automatically; inverse restores original layout",

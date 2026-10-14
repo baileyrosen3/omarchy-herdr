@@ -22,20 +22,23 @@ sys.path.insert(0, str(ROOT))
 from herdr_shell import desktop, game_input, onboarding, scoring
 from herdr_shell.runtime import Client, Context, ShellError
 from herdr_shell.trainer import missions, open_game
+from functools import partial
+from tests.probe_support import TmuxSession, eventually as wait_until, herdr_details
+
+eventually = partial(wait_until, timeout=10)
 
 
-def eventually(predicate, label, timeout=10):
-    until = time.monotonic() + timeout
-    last = None
-    while time.monotonic() < until:
-        try:
-            last = predicate()
-            if last:
-                return last
-        except (ShellError, OSError) as exc:
-            last = exc
-        time.sleep(.08)
-    raise AssertionError(f"Timed out: {label}; last={last}")
+def focus(context, tmux, guide):
+    context.validate()
+    client = context.client
+    title = "Herdr Learning" if context.pane == guide.pane else f"Probe {context.pane}"
+    if context.pane != guide.pane:
+        # Fresh practice shells have no border title. A short, unique label lets
+        # the attached client acknowledge this exact disposable destination.
+        client.call("pane.rename", pane_id=context.pane, label=title)
+    client.call("workspace.focus", workspace_id=context.workspace)
+    client.call("pane.focus", pane_id=context.pane)
+    tmux.wait_focus(title, f"attached client focus on {context.pane}", timeout=10)
 
 
 def exercise(root, client, env):
@@ -67,42 +70,14 @@ from herdr_shell.cli import main
 raise SystemExit(main())
 ''')
     client.call("plugin.link", path=str(fixture), enabled=True)
-    tmux_socket = root / "tmux.sock"
-
-    def tmux(*args):
-        result = subprocess.run(["tmux", "-S", str(tmux_socket), *args], env=env,
-                                text=True, capture_output=True, timeout=8)
-        if result.returncode:
-            raise RuntimeError(result.stderr)
-        return result.stdout
-
-    def screen():
-        return tmux("capture-pane", "-p", "-t", "quest:0.0")
-
-    def guide_focused():
-        # Herdr bolds the focused pane's title. The attached client's rendered
-        # focus, not the RPC reply/snapshot, determines where tmux keys go.
-        return "\x1b[1m Herdr Learning " in tmux("capture-pane", "-p", "-e", "-t", "quest:0.0")
-
-    def keys(*values):
-        tmux("send-keys", "-t", "quest:0.0", *values)
-
-    def literal(value):
-        tmux("send-keys", "-t", "quest:0.0", "-l", value)
+    tmux = TmuxSession(root / "tmux.sock", "quest:0.0", env)
+    screen, keys, literal = tmux.screen, tmux.keys, tmux.literal
 
     def focused_context():
         current = client.snapshot()
         pane = next(p for p in current["panes"] if p["pane_id"] == current["focused_pane_id"])
         return Context(client.path, pane["pane_id"], pane["workspace_id"], pane["tab_id"],
                        pane.get("foreground_cwd") or pane.get("cwd") or str(root), pane["terminal_id"])
-
-    def focus(context):
-        context.validate()
-        client.call("workspace.focus", workspace_id=context.workspace)
-        client.call("pane.focus", pane_id=context.pane)
-        eventually(lambda: guide_focused() == (context.pane == guide.pane),
-                   "attached client learning-guide focus" if context.pane == guide.pane
-                   else "attached client leaves learning guide")
 
     def unchanged(before):
         after = client.snapshot()
@@ -121,17 +96,18 @@ raise SystemExit(main())
         game_pane = opened["plugin_pane"]["pane"]
         guide = Context(client.path, game_pane["pane_id"], game_pane["workspace_id"],
                         game_pane["tab_id"], opened["practice_directory"], game_pane["terminal_id"])
-        eventually(lambda: "Try the keys. Watch their effects." in screen() and guide_focused(),
+        eventually(lambda: "Try the keys. Watch their effects." in screen(),
                    "Hands-on introduction with keyboard focus")
+        tmux.wait_focus("Herdr Learning", "Hands-on introduction with keyboard focus", timeout=10)
         initial = next(p for p in client.snapshot()["panes"] if p["tab_id"] == guide.tab and p["pane_id"] != guide.pane)
         initial_root = Context(client.path, initial["pane_id"], initial["workspace_id"], initial["tab_id"],
                                opened["practice_directory"], initial["terminal_id"])
         before = client.snapshot()
-        focus(initial_root)
+        focus(initial_root, tmux, guide)
         blocked = game_input.route("agent-new", focused_context())
         assert blocked and blocked["game"] == "blocked", blocked
         unchanged(before)
-        focus(guide)
+        focus(guide, tmux, guide)
         keys("Space")
         deck = missions()
         assert len(deck) == 26 and all(mission.live for mission in deck)
@@ -160,6 +136,7 @@ raise SystemExit(main())
                 return record
             record = eventually(armed, f"automatically armed mission {index + 1}", timeout=20)
             assert client.snapshot()["focused_pane_id"] == guide.pane
+            tmux.wait_focus("Herdr Learning", "armed mission guide keyboard focus", timeout=10)
             assert not client.call("layout.export", tab_id=guide.tab)["layout"]["zoomed"]
             return record
 
@@ -220,26 +197,26 @@ raise SystemExit(main())
                 assert count in screen()
                 assert not client.snapshot()["agents"]
                 before = client.snapshot()
-                focus(initial_root)
+                focus(initial_root, tmux, guide)
                 wrong = game_input.route("agent-new", focused_context())
                 assert wrong and wrong["game"] in ("wrong", "blocked"), wrong
                 unchanged(before)
-                focus(origin)
+                focus(origin, tmux, guide)
                 assert game_input.route("agent-new", focused_context()) is None
                 unchanged(before)
-                focus(guide)
+                focus(guide, tmux, guide)
                 ready(index, mission.id)
                 fixture_row = next(p for p in record["scope"] if p["tab_id"] != guide.tab)
                 earlier = Context(client.path, fixture_row["pane_id"], fixture_row["workspace_id"],
                                   fixture_row["tab_id"], opened["practice_directory"], fixture_row["terminal_id"])
             elif index == 1:
                 before = client.snapshot()
-                focus(earlier)
+                focus(earlier, tmux, guide)
                 wrong = game_input.route("agent-new", focused_context())
                 assert wrong and wrong["game"] in ("wrong", "blocked"), wrong
                 unchanged(before)
                 assert not client.snapshot()["agents"]
-                focus(guide)
+                focus(guide, tmux, guide)
                 ready(index, mission.id)
             perform_mission(index, mission.id, demo=index == 0 or mission.id == "menu")
 
@@ -249,6 +226,7 @@ raise SystemExit(main())
         assert onboarding.has_learning_completed()
         assert not (Path(env["XDG_STATE_HOME"]) / "herdr-shell/learning-speed.json").exists(), "Untimed Hands-on saved a score"
         eventually(lambda: not client.snapshot()["agents"], "Hands-on simulators stop at activity choices")
+        tmux.wait_focus("Herdr Learning", "Hands-on completion guide keyboard focus", timeout=10)
         print("Hands-on: all 26 exercises completed automatically; F4 demos and real menu verified.", file=sys.stderr, flush=True)
 
         # The read-only guide returns to these same choices on completion.
@@ -269,7 +247,7 @@ raise SystemExit(main())
         guide.validate()
         assert guide.workspace != previous_guide.workspace, (previous_guide, guide)
         assert Path(guide.cwd).is_relative_to(root), "Fresh practice escaped the private test directory"
-        eventually(guide_focused, "Speed Run introduction with keyboard focus")
+        tmux.wait_focus("Herdr Learning", "Speed Run introduction with keyboard focus", timeout=10)
         keys("Space")
         speed_started = time.monotonic()
         speed_order, assisted, pause_time = [], False, 0.0
@@ -355,6 +333,7 @@ raise SystemExit(main())
         assert len([p for p in client.snapshot()["panes"] if p["workspace_id"] == origin.workspace]) == 1
         assert all(p["workspace_id"] != origin.workspace for p in client.snapshot()["agents"])
         before = {(p["pane_id"], p["terminal_id"]) for p in client.snapshot()["panes"]}
+        tmux.wait_focus("Herdr Learning", "Speed Run scoreboard guide keyboard focus", timeout=10)
         keys("Escape")
         eventually(lambda: "SPEED RUN COMPLETE" not in screen(), "learning exits")
         eventually(lambda: not game_input._marker_path(client.path).exists(), "input broker expires on exit")
@@ -366,7 +345,8 @@ raise SystemExit(main())
         assert remaining
         assert (Path(opened["practice_directory"]) / "README.txt").exists()
         assert (Path(guide.cwd) / "README.txt").exists()
-        return {"passed": ["Hands-on automatically prepares 26 ordered exercises; F4 demonstrates a split and both real-menu presses",
+        return {"herdr": client.snapshot()["version"], **herdr_details(),
+                "passed": ["Hands-on automatically prepares 26 ordered exercises; F4 demonstrates a split and both real-menu presses",
                            "all eight read-only walkthrough pages preserve pane identities; Speed Run starts in a fresh guide/workspace",
                            "Speed Run drives all 26 shuffled live missions through 34 actual private-broker shortcut events",
                            "typed letters cannot act or score; one wrong chord deducts 25 and resets streak; unrelated workspace input stays outside the game",
@@ -438,7 +418,8 @@ def main():
                    XDG_STATE_HOME=str(root / "state"), XDG_CACHE_HOME=str(root / "cache"),
                    HERDR_CONFIG_PATH=str(root / "config.toml"), HOME=str(root / "home"),
                    HERDR_SHELL_QA_UNEXPECTED_AGENT=str(agent_error), PATH=str(root / "bin") + os.pathsep + env["PATH"])
-        (root / "config.toml").write_text("onboarding=false\n[update]\nversion_check=false\nmanifest_check=false\n[ui.sound]\nenabled=false\n")
+        # Single-pane tabs otherwise hide their borders, including focus titles.
+        (root / "config.toml").write_text('onboarding=false\n[update]\nversion_check=false\nmanifest_check=false\n[ui]\npane_borders="always"\n[ui.sound]\nenabled=false\n')
         with patch.dict(os.environ, env, clear=True), (root / "server.log").open("w+") as log:
             proc = subprocess.Popen(["herdr", "server"], env=env, stdout=log, stderr=log, start_new_session=True)
             client = Client(root / "config/herdr/herdr.sock")
