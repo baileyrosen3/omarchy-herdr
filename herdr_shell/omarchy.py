@@ -225,7 +225,7 @@ def watch(source, running_revision):
             desired = source_state(source)
             stable = stable + 1 if desired == observed and desired is not None else 1
             observed = desired
-            if desired is None or stable < 2 or time.monotonic() < retry_at:
+            if desired is None or stable < 2 or (desired != "removed" and time.monotonic() < retry_at):
                 time.sleep(POLL_SECONDS)
                 continue
             try:
@@ -262,9 +262,14 @@ def watch(source, running_revision):
                         applied, suspended = revision, False
                 retry_at = 0
             except (ShellError, OSError, ValueError, SyntaxError, subprocess.TimeoutExpired) as exc:
-                write_status("error", source=str(source), error=str(exc))
-                print("Omarchy Herdr: " + str(exc), file=sys.stderr, flush=True)
-                retry_at = time.monotonic() + 30
+                if desired == "enabled" and source_state(source) == "removed":
+                    # A manager deletion can race the payload read. Reconcile
+                    # removal on the next poll rather than backing off an update.
+                    retry_at = 0
+                else:
+                    write_status("error", source=str(source), error=str(exc))
+                    print("Omarchy Herdr: " + str(exc), file=sys.stderr, flush=True)
+                    retry_at = time.monotonic() + 30
             time.sleep(POLL_SECONDS)
 
 

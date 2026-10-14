@@ -5,11 +5,14 @@ import os
 import tomllib
 
 from .actions import CATALOG, catalog_rows, close_plan, rotation_unavailable
+from .closing import pane_close_confirmation_enabled, set_pane_close_confirmation
 from .config import ConfigStore, MISSING, bindings, get_value
 from . import desktop
+from . import naming
 from . import dialogs
-from .interface import DESCRIPTIONS, HOME, HOME_LABELS, LABELS, SECTIONS, MenuView, fit, section_for
-from .runtime import ShellError
+from .interface import (DESCRIPTIONS, HOME, LABELS, SECTIONS, SETTINGS_SECTIONS, MenuView, action_order, fit,
+                        group_for, section_for)
+from .runtime import ShellError, capability
 
 SETTINGS = [
     ("theme.name", "Theme", "catppuccin"),
@@ -23,11 +26,24 @@ SETTINGS = [
     ("ui.agent_panel_sort", "Agent ordering", "spaces"),
     ("ui.status_indicators", "Agent status indicators", "dots"),
     ("ui.confirm_close", "Confirm native workspace close", True),
-    ("ui.prompt_new_tab_name", "Ask for new tab name", True),
+    ("ui.prompt_new_tab_name", "Native tab-name prompt", True),
     ("ui.copy_on_select", "Copy selected text", True),
     ("ui.toast.delivery", "Notification delivery", "off"),
     ("ui.sound.enabled", "Notification sounds", True),
     ("terminal.new_cwd", "New pane directory policy", "follow"),
+]
+
+# Native-only numeric spacing. Stock Herdr silently ignores unknown fields, so
+# these rows stay hidden unless the native build advertises pane_spacing.
+SPACING_SETTINGS = [
+    {"path": "ui.pane_gap_horizontal", "label": "Pane gap (columns)", "default": 2,
+     "unit": "columns", "minimum": 0, "maximum": 65535},
+    {"path": "ui.pane_gap_vertical", "label": "Pane gap (rows)", "default": 1,
+     "unit": "rows", "minimum": 0, "maximum": 65535},
+    {"path": "ui.tab_padding_horizontal", "label": "Tab edge padding (columns)", "default": 1,
+     "unit": "columns", "minimum": 0, "maximum": 65535},
+    {"path": "ui.tab_padding_vertical", "label": "Tab edge padding (rows)", "default": 1,
+     "unit": "rows", "minimum": 0, "maximum": 65535},
 ]
 
 SETTING_OPTIONS = {
@@ -39,7 +55,11 @@ SETTING_OPTIONS = {
 }
 SETTING_HELP = {
     "theme.name": "Herdr color theme. Use terminal to follow your terminal's palette, or a built-in theme such as catppuccin, nord, or gruvbox.",
-    "ui.pane_gaps": "Keep a gap between split panes instead of sharing borders.",
+    "ui.pane_gaps": "Keep a gap between split panes instead of shared borders. On a spacing-enabled native build, On uses the numeric gap and tab edge sizes; Off removes both while keeping their values for later.",
+    "ui.pane_gap_horizontal": "Blank terminal columns between side-by-side panes when Gaps between panes is On. 0 leaves no blank gap and uses a shared divider if borders are shown. Whole numbers 0 to 65535; default 2.",
+    "ui.pane_gap_vertical": "Blank terminal rows between stacked panes when Gaps between panes is On. 0 leaves no blank gap and uses a shared divider if borders are shown. Whole numbers 0 to 65535; default 1.",
+    "ui.tab_padding_horizontal": "Blank terminal columns at each left/right edge of the tab's pane area when Gaps between panes is On. 0 adds no edge margin. Independent of pane gaps. Whole numbers 0 to 65535; default 1.",
+    "ui.tab_padding_vertical": "Blank terminal rows at each top/bottom edge of the tab's pane area when Gaps between panes is On. 0 adds no edge margin. Independent of pane gaps. Whole numbers 0 to 65535; default 1.",
     "ui.pane_outer_borders": "Draw a border around the outside of the pane area.",
     "ui.pane_scrollbars": "Show interactive scrollbars beside terminal panes.",
     "ui.hide_tab_bar_when_single_tab": "Hide the tab bar in workspaces that have only one tab.",
@@ -48,17 +68,54 @@ SETTING_HELP = {
     "ui.sidebar_collapsed_mode": "Choose whether a collapsed sidebar keeps a narrow status rail or disappears.",
     "ui.agent_panel_sort": "Group agents by workspace, or bring agents needing attention to the top.",
     "ui.status_indicators": "Symbols make agent states distinguishable without relying on color.",
-    "ui.confirm_close": "Ask before closing a workspace with Herdr's native command. Herdr Shell asks before closing running agents, tools, or unknown activity.",
-    "ui.prompt_new_tab_name": "Ask for a name with Herdr's built-in New tab shortcut. This menu creates tabs immediately.",
+    "ui.confirm_close": "Ask before closing a workspace with Herdr's native command. Herdr Shell tab and workspace closes ask before stopping running agents, tools, or unknown activity.",
+    "ui.prompt_new_tab_name": "Ask for a name with Herdr's built-in New tab shortcut. A name typed there is kept: automatic tab names never replace a manual name.",
     "ui.copy_on_select": "Copy selected terminal text to the clipboard automatically.",
     "ui.toast.delivery": "Choose where Herdr delivers background notifications.",
     "ui.sound.enabled": "Play sounds when agents change state in background workspaces.",
     "terminal.new_cwd": "Use follow, home, current, or a fixed directory. This menu's new panes always use the originating pane's directory.",
+    "tab-name-mode": "Agent task (default): each tab follows the task title of the agent running in it, shortened for the tab bar, and keeps it after the agent exits. A tab you rename keeps your name; Name tab from agent task hands it back. Herdr default: tabs show their position.",
+    "workspace-name-mode": "Name a new workspace from its Git project root (or the originating directory outside Git). Duplicate projects use the branch when available, then a suffix. Workspace names never change after creation: other tools group and find workspaces by name.",
 }
+
+# Settings page organization: each category from SETTINGS_SECTIONS holds display
+# groups of related values in stable order. Controls also links to the real
+# keybindings and desktop-setup actions instead of duplicating them.
+SETTINGS_GROUPS = [
+    ("layout", "Pane spacing", [
+        "ui.pane_gaps", "ui.pane_gap_horizontal", "ui.pane_gap_vertical",
+        "ui.tab_padding_horizontal", "ui.tab_padding_vertical",
+        "ui.pane_outer_borders", "ui.pane_scrollbars"]),
+    ("layout", "Tabs", ["ui.tab_bar_position", "ui.hide_tab_bar_when_single_tab"]),
+    ("layout", "Sidebar", ["ui.sidebar_width", "ui.sidebar_collapsed_mode"]),
+    ("appearance", "Theme", ["theme.name"]),
+    ("appearance", "Agent presentation", ["ui.status_indicators", "ui.agent_panel_sort"]),
+    ("behavior", "Confirmations", ["confirm-pane-close", "ui.confirm_close"]),
+    ("behavior", "Names", ["tab-name-mode", "workspace-name-mode"]),
+    ("behavior", "New panes", ["ui.prompt_new_tab_name", "terminal.new_cwd"]),
+    ("behavior", "Clipboard", ["ui.copy_on_select"]),
+    ("notifications", "Delivery & sound", ["ui.toast.delivery", "ui.sound.enabled"]),
+    ("controls", "Desktop profile", ["desktop-enabled"]),
+    ("controls", "Shortcuts", ["keybindings", "desktop-setup"]),
+]
 
 
 def setting_label(value):
     return "On" if value is True else "Off" if value is False else str(value)
+
+
+def pane_spacing_supported():
+    """Numeric pane spacing exists only with an explicit native capability."""
+    return capability("pane_spacing") == 1
+
+
+def settings_catalog(pane_spacing):
+    """Every setting entry with its default, adding native numeric spacing when supported."""
+    rows = [{"path": path, "label": label, "default": fallback} for path, label, fallback in SETTINGS]
+    if pane_spacing:
+        index = next(i for i, row in enumerate(rows) if row["path"] == "ui.pane_gaps") + 1
+        rows[index:index] = [dict(entry) for entry in SPACING_SETTINGS]
+    return rows
 
 
 class Menu:
@@ -74,6 +131,7 @@ class Menu:
         self.base = ""
         self.items = []
         self.section = "home"
+        self.settings_section = "layout"
         self.scroll = 0
         self.visible_rows = 1
         self.location = "Current workspace"
@@ -126,10 +184,12 @@ class Menu:
     def view_state(self):
         rows = self.filtered()
         selected_id = rows[min(self.selected, len(rows) - 1)]["id"] if rows else None
-        return {"page": self.page, "section": self.section, "query": self.query, "selected_id": selected_id,
+        return {"page": self.page, "section": self.section, "settings_section": self.settings_section,
+                "query": self.query, "selected_id": selected_id,
                 "selected": self.selected, "scroll": self.scroll, "search_origin": self.search_origin}
 
     def restore_view(self, state):
+        self.settings_section = state["settings_section"]
         self.query = state["query"]
         self.search_origin = state["search_origin"]
         rows = self.filtered()
@@ -177,14 +237,44 @@ class Menu:
                                        scope=" / ".join(sorted(scopes)) or "Herdr", kind="binding"))
         elif self.page == "settings":
             doc = tomllib.loads(self.base)
-            self.items = profile[:1]
-            for path, label, fallback in SETTINGS:
-                value = get_value(doc, path.split("."))
-                self.items.append({"id": path, "label": label, "path": path.split("."),
-                                   "value": fallback if value == MISSING else value,
-                                   "detail": setting_label(fallback if value == MISSING else value),
-                                   "description": SETTING_HELP[path], "default": fallback,
-                                   "source": "default" if value == MISSING else "user", "kind": "setting"})
+            entries = {entry["path"]: entry for entry in settings_catalog(pane_spacing_supported())}
+            self.items = []
+            preferences = naming.preferences()
+            for section, group, ids in SETTINGS_GROUPS:
+                for row_id in ids:
+                    entry = entries.pop(row_id, None)
+                    if entry is not None:
+                        path = entry["path"]
+                        value = get_value(doc, path.split("."))
+                        current = entry["default"] if value == MISSING else value
+                        detail = setting_label(current)
+                        row = {"id": path, "label": entry["label"], "path": path.split("."),
+                               "value": current, "detail": detail,
+                               "description": SETTING_HELP[path], "default": entry["default"],
+                               "source": "default" if value == MISSING else "user", "kind": "setting",
+                               "section": section, "group": group}
+                        row.update({key: entry[key] for key in ("unit", "minimum", "maximum") if key in entry})
+                        self.items.append(row)
+                    elif row_id in ("tab-name-mode", "workspace-name-mode"):
+                        key, label = {"tab-name-mode": ("tab_mode", "Tab names"),
+                                      "workspace-name-mode": ("workspace_mode", "New workspace names")}[row_id]
+                        value = preferences[key]
+                        self.items.append({"id": row_id, "label": label,
+                                           "detail": naming.LABELS[key][value],
+                                           "value": value, "setting": key,
+                                           "description": SETTING_HELP[row_id], "kind": "naming-setting",
+                                           "section": section, "group": group})
+                    elif row_id == "confirm-pane-close":
+                        self.items.append({"id": row_id, "label": "Confirm pane close",
+                                           "detail": setting_label(pane_close_confirmation_enabled()),
+                                           "description": "On (default): ask before closing a pane with running or unknown activity. Off: close immediately, stopping any agent or command. Enter saves immediately; tab and workspace confirmations are unchanged.",
+                                           "kind": "pane-close-toggle", "section": section, "group": group})
+                    elif row_id == "desktop-enabled" and profile:
+                        self.items.append(dict(profile[0], section=section, group=group))
+                    elif row_id in ("keybindings", "desktop-setup"):
+                        self.items.append({"id": row_id, "label": LABELS[row_id], "detail": "",
+                                           "description": DESCRIPTIONS[row_id], "kind": "action",
+                                           "section": section, "group": group})
         elif self.page.endswith("-picker"):
             moving = self.page == "pane-workspace-picker"
             kind = "workspace" if moving else self.page.removesuffix("-picker")
@@ -241,17 +331,19 @@ class Menu:
                 item = dict(row, label=LABELS.get(action, row["label"]), keywords=row["label"],
                             keys=keys, detail=" / ".join(desktop.pretty_key(k, prefix) for k in keys),
                             description=description, kind="action", section=section_for(row),
-                            scope="Herdr focused" if action in direct_keys else "Herdr")
+                            group=group_for(row), scope="Herdr focused" if action in direct_keys else "Herdr")
                 if action in proposed_keys:
                     direct = profile_actions.get(action, {})
                     full_key = desktop.pretty_key(proposed_keys[action])
-                    item.update(shortcut_key=full_key, shortcut_suffix=full_key.removeprefix("Super+Alt+"),
+                    item.update(shortcut_key=full_key,
                                 shortcut_active=bool(direct.get("active")),
                                 shortcut_status=direct.get("status", "unavailable"),
                                 shortcut_reason=direct.get("reason", ""))
                 self.items.append(item)
             toggle = profile[0]
-            self.items.append(dict(toggle, section="configure", description=DESCRIPTIONS["desktop-enabled"]))
+            self.items.append(dict(toggle, section=section_for(toggle), group=group_for(toggle),
+                                   description=DESCRIPTIONS["desktop-enabled"]))
+            self.items.sort(key=action_order)
         for row in self.items:
             if row["id"] == "desktop-enabled":
                 row["description"] = DESCRIPTIONS["desktop-enabled"]
@@ -263,20 +355,24 @@ class Menu:
         words = self.query.lower().split()
         rows = [r for r in self.items if (words or self.show_unassigned or r["kind"] != "binding" or any(r["keys"])) and
                 all(word in " ".join(str(r.get(k, "")) for k in
-                ("label", "detail", "id", "category", "source", "scope", "description", "keywords", "section")).lower() for word in words)]
+                ("label", "detail", "id", "category", "source", "scope", "description", "keywords", "section",
+                 "group")).lower() for word in words)]
         if self.page == "menu" and not words:
             if self.section == "home":
                 home = []
-                for row in sorted((r for r in rows if r["id"] in HOME), key=lambda r: HOME.index(r["id"])):
-                    row = dict(row, label=HOME_LABELS[row["id"]], detail=row["shortcut_key"], keys=[row["shortcut_key"]])
+                for row in (r for r in rows if r["id"] in HOME):
+                    row = dict(row, detail=row["shortcut_key"], keys=[row["shortcut_key"]])
                     if not row["shortcut_active"]:
-                        row["description"] += " Shortcut " + row["shortcut_status"] + ": " + (row["shortcut_reason"] or "Enable the desktop profile in Configure.")
+                        row["shortcut_inactive"] = True
+                        row["description"] += " Shortcut " + row["shortcut_status"] + ": " + (row["shortcut_reason"] or "Enable the desktop profile in Settings → Controls.")
                         row["description"] += " Enter can still run an available menu action."
                     home.append(row)
                 return home
             if self.section == "all":
-                return sorted(rows, key=lambda r: r["label"].casefold())
+                return rows
             return [r for r in rows if r.get("section") == self.section]
+        if self.page == "settings" and not words:
+            return [r for r in rows if r.get("section") == self.settings_section]
         return rows
 
     def draw(self, rows):
@@ -288,6 +384,13 @@ class Menu:
         self.page = "menu"
         self.history.clear()
         self.load(preserve=False)
+
+    def change_settings_section(self, direction):
+        """Cycle categories in place: the settings page and parent history stay intact."""
+        index = next(i for i, section in enumerate(SETTINGS_SECTIONS) if section[0] == self.settings_section)
+        self.settings_section = SETTINGS_SECTIONS[(index + direction) % len(SETTINGS_SECTIONS)][0]
+        if not self.query:
+            self.load(preserve=False)
 
     def open_page(self, page):
         if self.page == page:
@@ -308,10 +411,17 @@ class Menu:
 
     def set_query(self, value):
         if value and not self.query:
-            self.search_origin = (self.selected, self.scroll)
+            rows = self.filtered()
+            origin = rows[min(self.selected, len(rows) - 1)]["id"] if rows else None
+            self.search_origin = (origin, self.scroll, self.settings_section)
         self.query, self.selected, self.scroll = value, 0, 0
         if not value and self.search_origin:
-            self.selected, self.scroll = self.search_origin
+            origin, scroll, settings_section = self.search_origin
+            if self.page == "settings":
+                self.settings_section = settings_section
+            rows = self.filtered()
+            self.selected = next((i for i, row in enumerate(rows) if row["id"] == origin), 0)
+            self.scroll = min(scroll, self.selected)
             self.search_origin = None
 
     def show_error(self, exc):
@@ -377,12 +487,15 @@ class Menu:
                             if not (isinstance(updated, str) or isinstance(updated, list) and all(isinstance(v, str) for v in updated)):
                                 raise ValueError("Use one shortcut or an array of quoted shortcuts.")
                         elif isinstance(value, int):
+                            minimum, maximum = row.get("minimum", 1), row.get("maximum")
+                            outside = (f"Enter a whole number of {row['unit']} from {minimum} to {maximum}."
+                                       if row.get("unit") and maximum is not None else None)
                             try:
                                 updated = int(raw)
                             except ValueError as exc:
-                                raise ValueError("Enter a positive whole number, such as 26.") from exc
-                            if updated < 1:
-                                raise ValueError("Enter a positive whole number.")
+                                raise ValueError(outside or "Enter a positive whole number, such as 26.") from exc
+                            if updated < minimum or (maximum is not None and updated > maximum):
+                                raise ValueError(outside or "Enter a positive whole number.")
                         else:
                             updated = tomllib.loads("value = " + raw)["value"] if raw.strip().startswith(('"', "'")) else raw.strip()
                             if not isinstance(updated, str) or not updated:
@@ -411,6 +524,20 @@ class Menu:
             self.notice = "Saved and reloaded. Ctrl+Z undoes this change."
             return
 
+    def edit_naming(self, row):
+        options = naming.OPTIONS[row["setting"]]
+        selected = next(i for i, (value, _) in enumerate(options) if value == row["value"])
+        value = dialogs.choose(self, row["label"], options, selected,
+                               help_text=row["description"],
+                               footer="↑↓ Select  Enter Save  Esc Cancel")
+        if value is dialogs.CANCEL:
+            return
+        changed = naming.set_preference(row["setting"], value)
+        self.load()
+        self.notice = row["label"] + (" saved: " + naming.LABELS[row["setting"]][value]
+                                      if changed else " already uses that value.")
+
+
     def undo(self):
         proposal, path = self.store.undo_proposal()
         if self.review(proposal):
@@ -433,9 +560,18 @@ class Menu:
                 self.load()
                 self.notice = "Super+Alt profile enabled. Conflicting shortcuts stay reserved." if self.controls_enabled else "Super+Alt profile disabled."
             return
+        if row["kind"] == "pane-close-toggle":
+            enabled = not pane_close_confirmation_enabled()
+            set_pane_close_confirmation(enabled)
+            self.load()
+            self.notice = "Pane close confirmation enabled." if enabled else "Pane closes immediately, including running agents and commands."
+            return
         if row["kind"] == "desktop-binding":
             dialogs.document(self, "Desktop shortcut · read only", [row["label"], row["detail"], "", row["description"], "",
-                "Use Omarchy controls in Configure to enable or disable the Herdr profile."])
+                "Use Omarchy controls in Settings → Controls to enable or disable the Herdr profile."])
+            return
+        if row["kind"] == "naming-setting":
+            self.edit_naming(row)
             return
         if row["kind"] in ("binding", "setting"):
             self.edit(row)
@@ -471,10 +607,7 @@ class Menu:
                 self.notice = "Terminal palette selected."
                 self.load()
         elif action in ("pane-close", "tab-close", "workspace-close"):
-            plan = close_plan(action, self.context)
-            if plan["needs_confirmation"] and not self.confirm_close(plan):
-                return
-            return {"kind": "close", "plan": plan}
+            return self.close(close_plan(action, self.context))
         else:
             return {"kind": "action", "id": action, "yes": CATALOG[action].confirm}
 
@@ -498,6 +631,13 @@ class Menu:
             desktop.install_desktop(proposal)
             self.notice = "Omarchy controls enabled for the focused Herdr terminal."
             self.load()
+
+    def close(self, plan):
+        if plan["action_id"] == "pane-close" and not pane_close_confirmation_enabled():
+            plan["confirmed"] = True
+        elif plan["needs_confirmation"] and not self.confirm_close(plan):
+            return None
+        return {"kind": "close", "plan": plan}
 
     def confirm_close(self, plan):
         """Keep the target and all affected activity readable before closing."""
@@ -552,8 +692,8 @@ class Menu:
                    "Directory: " + self.context.cwd, ""]
         dialogs.document(self, "Herdr × Omarchy · Menu help", details + [
             "MOVE AND SEARCH", "↑ / ↓ select an item. Enter uses the action named in the footer.",
-            "Tab / Shift+Tab or ← / → switch sections on the main menu.",
-            "Type to search. Search on the main menu includes every section.",
+            "Tab / Shift+Tab or ← / → switch sections on the main menu, and categories in Settings.",
+            "Type to search. Search covers every main section, and every Settings category.",
             "Esc clears search, then returns to the previous page or Home, then closes.",
             "PgUp / PgDn scroll lists and documents. Home / End jump to the ends.", "",
             "PAGES", "F2 opens Keybindings. Ctrl+O (or F3) opens Settings.",
@@ -566,12 +706,12 @@ class Menu:
             "Custom commands keep their own shortcut entry and have no inherited default.", "",
             "EDITING", "Use ← / →, Home / End, Backspace or Delete to edit text.",
             "Ctrl+U clears input. Ctrl+W deletes a word. Ctrl+K deletes to the end.",
-            "Enter previews a change; Enter again saves and reloads. Esc goes back.",
+            "Native settings and key edits preview changes; Enter again saves and reloads. Toggles save immediately. Esc goes back.",
             "Invalid entries remain in the editor so you can correct them.", "",
             "FOCUSED CONTROLS", "The Super+Alt profile affects Herdr only while its terminal is focused.",
             "Existing desktop shortcuts remain reserved, including while Herdr is focused.",
-            "Closing an idle shell runs directly. Running agents, tools, or unknown activity require confirmation.",
-            "Pane focus stops at the edge. Tabs and workspaces have separate commands.",
+            "Idle shells close directly. Running or unknown activity asks first by default; Settings can turn off pane close confirmation.",
+            "Directional focus stays local. Pane cycles continue through tabs and workspaces; tab cycles continue through workspaces.",
             "Actions use the pane and directory from which this menu was opened.",
             "Ctrl+C closes the menu; inside a dialog it cancels the dialog.",
         ])
@@ -602,9 +742,7 @@ class Menu:
                 plan = json.loads(saved) if saved else close_plan(self.page.removeprefix("confirm-"), self.context)
                 if plan["action_id"] != self.page.removeprefix("confirm-"):
                     raise ShellError("The close confirmation does not match this action. Reopen it from the originating pane.")
-                if plan["needs_confirmation"] and not self.confirm_close(plan):
-                    return None
-                return {"kind": "close", "plan": plan}
+                return self.close(plan)
             except (ShellError, OSError, ValueError, KeyError, TypeError) as exc:
                 self.show_error(exc)
                 return None
@@ -641,6 +779,9 @@ class Menu:
                 elif key in ("\t", curses.KEY_RIGHT, curses.KEY_LEFT, curses.KEY_BTAB) and self.page == "menu":
                     self.notice = ""
                     self.change_section(-1 if key in (curses.KEY_LEFT, curses.KEY_BTAB) else 1)
+                elif key in ("\t", curses.KEY_RIGHT, curses.KEY_LEFT, curses.KEY_BTAB) and self.page == "settings":
+                    self.notice = ""
+                    self.change_settings_section(-1 if key in (curses.KEY_LEFT, curses.KEY_BTAB) else 1)
                 elif key == curses.KEY_F1:
                     self.help()
                 elif key in (curses.KEY_F2, curses.KEY_F3, "\x0f"):

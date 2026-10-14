@@ -7,8 +7,9 @@ import shlex
 import shutil
 
 from . import PLUGIN_ID, VERSION
-from .closing import CLOSE_ACTIONS, close_plan, execute_close
-from .navigation import cycle_agent, cycle_pane
+from .closing import CLOSE_ACTIONS, close_plan, execute_close, pane_close_confirmation_enabled
+from . import naming
+from .navigation import cycle_agent, cycle_pane, cycle_tab
 from .rotation import rotate_pane, rotation_unavailable
 from .runtime import ShellError
 
@@ -47,14 +48,15 @@ ACTIONS = [
     Action("agent-next-waiting", "Next waiting agent", "Navigate", description="Focus an agent that needs input"),
     Action("agent-cycle-next", "Next agent by priority", "Navigate", description="Cycle needs input, done, working, then idle agents without reordering mid-cycle"),
     Action("agent-cycle-previous", "Previous agent by priority", "Navigate", description="Cycle backward through the same stable agent order"),
-    Action("pane-cycle-next", "Next pane in tab", "Navigate", "cycle_pane_next"),
-    Action("pane-cycle-previous", "Previous pane in tab", "Navigate", "cycle_pane_previous"),
+    Action("pane-cycle-next", "Next pane", "Navigate", description="Continue through panes, tabs, and workspaces in order; wrap after the final workspace"),
+    Action("pane-cycle-previous", "Previous pane", "Navigate", description="Go backward through panes, tabs, and workspaces in the same order"),
     Action("workspace-previous", "Previous workspace", "Navigate", "previous_workspace"),
     Action("workspace-next", "Next workspace", "Navigate", "next_workspace"),
-    Action("tab-previous", "Previous tab", "Navigate", "previous_tab"),
-    Action("tab-next", "Next tab", "Navigate", "next_tab"),
+    Action("tab-previous", "Previous tab", "Navigate", description="Continue to the previous workspace at the first tab; restore the selected pane"),
+    Action("tab-next", "Next tab", "Navigate", description="Continue to the next workspace at the last tab; restore the selected pane"),
     Action("workspace-new", "New workspace", "Launch", "new_workspace"),
     Action("tab-new", "New tab", "Launch", "new_tab"),
+    Action("tab-auto-name", "Name tab from agent task", "Arrange", description="Drop this tab's manual name; its agent's task names it again"),
     Action("agent-new", "New agent pane", "Launch", description="Default Omarchy agent in this pane's directory and tab"),
     Action("launch-git", "Open Git", "Launch", description="Lazygit in a regular pane in this project's directory"),
     Action("launch-editor", "Open editor", "Launch", description="Your editor in this project's directory"),
@@ -65,7 +67,7 @@ ACTIONS = [
     Action("pane-split-left", "Split pane left", "Arrange"),
     Action("pane-zoom", "Toggle pane zoom", "Arrange", "zoom"),
     Action("pane-rotate", "Rotate two-pane split", "Arrange", description="Toggle the nearest two-pane sibling split between columns and rows, preserving running processes and its ratio"),
-    Action("pane-close", "Close pane", "Arrange", description="Close this pane; ask first if it has an agent, running command, or unverified activity"),
+    Action("pane-close", "Close pane", "Arrange", description="Close this pane; by default ask first if it has an agent, running command, or unverified activity. Toggle confirmation in Settings"),
     Action("tab-close", "Close tab", "Arrange", description="Close this tab and its panes; ask first if any have activity"),
     Action("workspace-close", "Close workspace", "Arrange", description="Close this workspace and its tabs; ask first if any panes have activity"),
     Action("theme-terminal", "Use terminal colors", "Configure", description="Follow the outer terminal's palette"),
@@ -146,6 +148,8 @@ def execute(action_id, context, *, yes=False):
     context.validate()
     client = context.client
     if action_id in CLOSE_ACTIONS:
+        if not yes and action_id == "pane-close" and not pane_close_confirmation_enabled():
+            yes = True
         plan = close_plan(action_id, context)
         if plan["needs_confirmation"] and not yes:
             return open_ui(context, "confirm-" + action_id, env={"HERDR_SHELL_CLOSE_PLAN": json.dumps(plan)})
@@ -193,8 +197,8 @@ def execute(action_id, context, *, yes=False):
         split_direction = {"left": "right", "up": "down"}.get(direction, direction)
         result = client.call("pane.split", target_pane_id=context.pane, workspace_id=context.workspace,
                              direction=split_direction, cwd=context.cwd, focus=True)
+        created = result["pane"]["pane_id"]
         if direction in ("left", "up"):
-            created = result["pane"]["pane_id"]
             swapped = client.call("pane.swap", source_pane_id=created, target_pane_id=context.pane)
             if not swapped.get("swap", {}).get("changed"):
                 raise ShellError(f"Pane {created} was created {split_direction}, but could not be moved {direction}.")
@@ -203,21 +207,31 @@ def execute(action_id, context, *, yes=False):
     if action_id == "pane-zoom":
         return client.call("pane.zoom", pane_id=context.pane, mode="toggle")
     if action_id == "tab-new":
+        # Unlabeled: the namer names the tab once its agent has a task.
         return client.call("tab.create", workspace_id=context.workspace, cwd=context.cwd, focus=True)
+    if action_id == "tab-auto-name":
+        from . import namer
+        positions = naming.tab_positions(client.snapshot())
+        if context.tab not in positions:
+            raise ShellError("The original tab no longer exists.")
+        # Herdr's default label (the tab's position) hands the tab back to the namer.
+        result = client.call("tab.rename", tab_id=context.tab, label=positions[context.tab])
+        namer.ensure(context.socket)
+        return result
     if action_id == "workspace-new":
-        return client.call("workspace.create", source_workspace_id=context.workspace, cwd=context.cwd, focus=True)
-    if action_id in ("workspace-previous", "workspace-next", "tab-previous", "tab-next"):
-        kind, direction = action_id.split("-")
         snapshot = client.snapshot()
-        rows = snapshot[kind + "s"]
-        if kind == "tab":
-            rows = [r for r in rows if r["workspace_id"] == context.workspace]
-        ids = [r[kind + "_id"] for r in rows]
-        current = context.workspace if kind == "workspace" else context.tab
-        if current not in ids:
+        existing = [workspace.get("label") for workspace in snapshot["workspaces"]]
+        label = naming.workspace_label(context.cwd, naming.preferences()["workspace_mode"], existing)
+        return client.call("workspace.create", source_workspace_id=context.workspace,
+                           cwd=context.cwd, label=label, focus=True)
+    if action_id in ("tab-previous", "tab-next"):
+        return cycle_tab(context, 1 if action_id.endswith("next") else -1)
+    if action_id in ("workspace-previous", "workspace-next"):
+        ids = [w["workspace_id"] for w in client.snapshot()["workspaces"]]
+        if context.workspace not in ids:
             raise ShellError("The original target no longer exists.")
-        selected = ids[(ids.index(current) + (1 if direction == "next" else -1)) % len(ids)]
-        return client.call(kind + ".focus", **{kind + "_id": selected})
+        selected = ids[(ids.index(context.workspace) + (1 if action_id.endswith("next") else -1)) % len(ids)]
+        return client.call("workspace.focus", workspace_id=selected)
     if action_id == "agent-next-waiting":
         panes = [p for p in client.snapshot()["panes"] if p.get("agent_status") == "blocked"]
         if not panes:
@@ -277,4 +291,12 @@ def manifest():
                   'command = ' + json.dumps(["lazygit"])])
     lines.extend(["", "[[panes]]", 'id = "trainer"', 'title = "Herdr Learning"', 'placement = "split"',
                   'command = ' + json.dumps(["sh", "-c", 'exec python3 "$HERDR_PLUGIN_ROOT/bin/herdr-shell" _learn'])])
+    # The tab namer is one daemon per server: started with the server, and
+    # re-ensured (a no-op while it runs) when tabs or agents appear, which also
+    # covers a plugin linked into an already running server.
+    ensure = json.dumps(["python3", "bin/herdr-shell", "_namer", "ensure"])
+    lines.extend(["", "[[startup]]", "command = " + ensure])
+    for event in ("tab.created", "pane.agent_detected"):
+        lines.extend(["", "[[events]]", "id = " + json.dumps("namer-" + event.replace(".", "-").replace("_", "-")),
+                      "on = " + json.dumps(event), "command = " + ensure])
     return "\n".join(lines) + "\n"

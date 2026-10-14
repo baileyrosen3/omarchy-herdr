@@ -79,6 +79,11 @@ raise SystemExit(main())
     def screen():
         return tmux("capture-pane", "-p", "-t", "quest:0.0")
 
+    def guide_focused():
+        # Herdr bolds the focused pane's title. The attached client's rendered
+        # focus, not the RPC reply/snapshot, determines where tmux keys go.
+        return "\x1b[1m Herdr Learning " in tmux("capture-pane", "-p", "-e", "-t", "quest:0.0")
+
     def keys(*values):
         tmux("send-keys", "-t", "quest:0.0", *values)
 
@@ -95,6 +100,9 @@ raise SystemExit(main())
         context.validate()
         client.call("workspace.focus", workspace_id=context.workspace)
         client.call("pane.focus", pane_id=context.pane)
+        eventually(lambda: guide_focused() == (context.pane == guide.pane),
+                   "attached client learning-guide focus" if context.pane == guide.pane
+                   else "attached client leaves learning guide")
 
     def unchanged(before):
         after = client.snapshot()
@@ -113,7 +121,8 @@ raise SystemExit(main())
         game_pane = opened["plugin_pane"]["pane"]
         guide = Context(client.path, game_pane["pane_id"], game_pane["workspace_id"],
                         game_pane["tab_id"], opened["practice_directory"], game_pane["terminal_id"])
-        eventually(lambda: "Try the keys. Watch their effects." in screen(), "Hands-on introduction")
+        eventually(lambda: "Try the keys. Watch their effects." in screen() and guide_focused(),
+                   "Hands-on introduction with keyboard focus")
         initial = next(p for p in client.snapshot()["panes"] if p["tab_id"] == guide.tab and p["pane_id"] != guide.pane)
         initial_root = Context(client.path, initial["pane_id"], initial["workspace_id"], initial["tab_id"],
                                opened["practice_directory"], initial["terminal_id"])
@@ -260,6 +269,7 @@ raise SystemExit(main())
         guide.validate()
         assert guide.workspace != previous_guide.workspace, (previous_guide, guide)
         assert Path(guide.cwd).is_relative_to(root), "Fresh practice escaped the private test directory"
+        eventually(guide_focused, "Speed Run introduction with keyboard focus")
         keys("Space")
         speed_started = time.monotonic()
         speed_order, assisted, pause_time = [], False, 0.0

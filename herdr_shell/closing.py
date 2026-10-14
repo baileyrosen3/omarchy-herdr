@@ -1,10 +1,27 @@
 """Activity-aware close proposals pinned to the reviewed pane identities."""
 from pathlib import Path
 
+from .config import atomic_write
 from .runtime import ShellError
 
 
 CLOSE_ACTIONS = {"pane-close": "pane", "tab-close": "tab", "workspace-close": "workspace"}
+
+
+def _pane_close_preference_path():
+    from .desktop import preferences_dir
+    return preferences_dir() / "confirm-pane-close"
+
+
+def pane_close_confirmation_enabled():
+    try:
+        return _pane_close_preference_path().read_text().strip() != "0"
+    except FileNotFoundError:
+        return True
+
+
+def set_pane_close_confirmation(enabled):
+    atomic_write(_pane_close_preference_path(), "1\n" if enabled else "0\n")
 
 
 def shell_jobs(shell_pid, proc_root=Path("/proc")):

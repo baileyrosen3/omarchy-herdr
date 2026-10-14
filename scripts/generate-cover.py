@@ -58,7 +58,7 @@ banner = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="460" v
     <text x="859" y="359" font-size="14" fill="#94aab5">Desktop shortcuts stay as configured.</text>
     <path d="M64 412H1376" stroke="#243d4a"/>
     <text x="64" y="439" font-size="11" letter-spacing="1.7" fill="#7592a3">HERDR PLUGIN · LINUX · OMARCHY LUA BRIDGE</text>
-    <text x="1376" y="439" text-anchor="end" font-family="DejaVu Sans Mono, monospace" font-size="12" fill="#e0af68">v0.1.0 / preview</text>
+    <text x="1376" y="439" text-anchor="end" font-family="DejaVu Sans Mono, monospace" font-size="12" fill="#e0af68">v0.2.0 / preview</text>
   </g>
 </svg>
 '''

@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -57,6 +58,7 @@ def exercise(root, client):
     execute("pane-zoom", context)
     checks.append("actions stay pinned to the original pane after focus changes")
     client.call("pane.focus", pane_id=context.pane)
+    client.call("pane.rename", pane_id=context.pane, label="Probe keyboard target")
 
     tmux_socket = root / "tmux.sock"
     def tmux(*args):
@@ -70,6 +72,14 @@ def exercise(root, client):
 
     def screen():
         return tmux("capture-pane", "-p", "-t", "qa:0.0")
+
+    def keyboard_target_ready():
+        # Popup text can disappear before the attached client has rendered its
+        # return to pane focus. Bold titles identify actual client key routing,
+        # rather than merely the server snapshot's selected pane.
+        captured = tmux("capture-pane", "-p", "-e", "-t", "qa:0.0")
+        return ("\x1b[1m Probe keyboard target " in captured and
+                "┌Herdr Shell" not in screen())
 
     def keys(*args):
         tmux("send-keys", "-t", "qa:0.0", *args)
@@ -90,7 +100,7 @@ def exercise(root, client):
         keys("Left")
         eventually(lambda: "One shortcut family" in screen(), "walkthrough previous page")
         keys("Escape")
-        eventually(lambda: "One shortcut family" not in screen(), "walkthrough dismissal")
+        eventually(keyboard_target_ready, "walkthrough dismissal restores pane focus")
         keys("C-Space", "Space")
         eventually(lambda: "HERDR  ×  OMARCHY" in screen(), "menu shortcut opens popup")
         assert "Welcome to Herdr Shell" not in screen()
@@ -102,10 +112,10 @@ def exercise(root, client):
         keys("End")
         eventually(lambda: "26/26" in screen() and "Close menu" in screen(), "all shortcuts reachable on Home")
         keys("Enter")
-        eventually(lambda: "HERDR  ×  OMARCHY" not in screen(), "menu reference entry dismisses popup")
+        eventually(keyboard_target_ready, "menu reference dismissal restores pane focus")
         keys("C-Space", "Space")
-        eventually(lambda: "Hold Super+Alt" in screen(), "compact Home reopens")
-        checks.append("compact Home lists 26 shortcuts and menu toggle dismisses instead of reopening")
+        eventually(lambda: "HERDR  ×  OMARCHY" in screen(), "Home reopens in the shared menu")
+        checks.append("Home retains 26 shortcuts and its menu action dismisses instead of reopening")
 
         keys("F2")
         eventually(lambda: "Keybindings" in screen(), "keybinding screen")
@@ -121,7 +131,7 @@ def exercise(root, client):
         eventually(lambda: tomllib.loads(store.read())["keys"].get("zoom") == "prefix+f", "binding saved")
         eventually(lambda: "Saved and reloaded" in screen(), "successful save feedback")
         keys("Escape", "Escape", "Escape")
-        eventually(lambda: "HERDR  ×  OMARCHY" not in screen(), "popup closes on Escape")
+        eventually(keyboard_target_ready, "popup Escape restores pane focus")
         keys("C-Space", "f")
         eventually(lambda: client.snapshot()["layouts"][0]["zoomed"], "reloaded shortcut works in client")
         keys("C-Space", "f")
@@ -136,7 +146,7 @@ def exercise(root, client):
         eventually(lambda: "zoom" not in tomllib.loads(store.read())["keys"], "undo removes only added key")
         eventually(lambda: "Undone and reloaded" in screen(), "undo feedback")
         keys("Escape")
-        eventually(lambda: "HERDR  ×  OMARCHY" not in screen(), "undo menu closes")
+        eventually(keyboard_target_ready, "undo menu restores pane focus")
         checks.append("live configuration undo")
 
         keys("C-Space", "Space")
@@ -156,9 +166,26 @@ def exercise(root, client):
         assert "Traceback" not in screen()
         tmux("resize-window", "-t", "qa:0", "-x", "132", "-y", "44")
         eventually(lambda: "Settings" in screen(), "resize recovery")
+
         client.call("popup.close")
-        eventually(lambda: "HERDR  ×  OMARCHY" not in screen(), "settings closes")
+        eventually(lambda: "HERDR  ×  OMARCHY" not in screen(), "settings popup closes")
         checks.append("settings popup and terminal resize")
+
+        command = shlex.join([sys.executable, str(ROOT / "bin/herdr-shell"), "--socket", client.path,
+                              "--pane", context.pane, "settings", "--inline"])
+        literal(command)
+        keys("Enter")
+        eventually(lambda: "Settings · Layout" in screen(), "inline Settings TUI")
+        keys("Right")
+        eventually(lambda: "Settings · Appearance" in screen(), "appearance settings category")
+        keys("Right")
+        eventually(lambda: all(label in screen() for label in ("Tab names", "Agent task", "New workspace names")),
+                   "behavior naming settings")
+        checks.append("Settings exposes live tab names and workspace naming choices")
+        keys("C-c")
+        eventually(lambda: "‹ Home ›" not in screen() and "Home · Search" not in screen() and
+                   "Settings ·" not in screen(), "inline Settings TUI closes")
+
 
         client.call("plugin.pane.open", plugin_id=PLUGIN_ID, entrypoint="tool", placement="popup",
                     cwd=context.cwd,
@@ -192,6 +219,8 @@ def exercise(root, client):
         keys("C-c")
         eventually(lambda: not running_sleep(), "disposable work stops after cancellation check")
         checks.append("registered close action confirms running work and cancellation preserves its process")
+
+
     except Exception:
         print("SCREEN\n" + screen(), flush=True)
         log = root / "state/herdr-shell/actions.log"
@@ -209,7 +238,10 @@ def exercise(root, client):
 def main():
     with tempfile.TemporaryDirectory(prefix="herdr-shell-probe-") as directory:
         root = Path(directory)
-        env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_") and k != "TMUX"}
+        # Without the compositor socket, popups cannot pick up the live desktop's
+        # Herdr Shell preferences (for example, a disabled pane-close prompt).
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("HERDR_") and k not in ("TMUX", "HYPRLAND_INSTANCE_SIGNATURE")}
         env.update(XDG_CONFIG_HOME=str(root / "config"), XDG_DATA_HOME=str(root / "data"),
                    XDG_STATE_HOME=str(root / "state"), XDG_CACHE_HOME=str(root / "cache"),
                    HERDR_CONFIG_PATH=str(root / "config.toml"))

@@ -1,12 +1,11 @@
 """Optional native footer configuration with exact provider ownership."""
-import json
 from pathlib import Path
 import shlex
 import sys
 import tomllib
 
 from .config import MISSING
-from .runtime import ShellError, run_herdr
+from .runtime import capability
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,11 +24,7 @@ def supported():
     Stock versions reject this read-only flag. Unknown config fields can be
     silently ignored, so a successful config check is not a capability probe.
     """
-    try:
-        reply = json.loads(run_herdr(["--client-capabilities"]))
-    except (ShellError, OSError, ValueError, TypeError):
-        return False
-    return isinstance(reply, dict) and type(reply.get("footer")) is int and reply["footer"] == 1
+    return capability("footer") == 1
 
 
 def changes(existing, root=None, *, remove=False, enabled=True, capability=None):

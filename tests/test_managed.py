@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from herdr_shell import PLUGIN_ID, config, managed, footer_setup
+from herdr_shell import PLUGIN_ID, config, managed, footer_setup, namer
 from herdr_shell.runtime import ShellError
 
 
@@ -91,6 +91,8 @@ class ManagedTests(unittest.TestCase):
                         patch.object(managed, "desktop", self.desktop),
                         patch.object(managed, "_reload_servers", self.reload),
                         patch.object(footer_setup, "supported", return_value=False),
+                        patch.object(namer, "ensure", return_value={"namer": "running"}),
+                        patch.object(namer, "stop", return_value={"stopped": []}),
                         patch.object(config, "defaults", return_value={"prefix": "ctrl+space", "focus_pane_left": "ctrl+alt+left"})):
             patcher.start()
             self.addCleanup(patcher.stop)

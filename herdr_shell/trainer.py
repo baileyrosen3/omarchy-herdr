@@ -31,13 +31,13 @@ QUESTIONS = {
     "pane-swap-right": ("Exchange this pane with its neighbor to the RIGHT.", "Shift changes a directional split into a swap."),
     "pane-rotate": ("Rotate the nearest two-pane split between side by side and stacked.", "J rotates two sibling panes while preserving their processes."),
     "pane-zoom": ("Let this pane fill its tab, then restore its split.", "Z toggles zoom. Press the same key to restore."),
-    "pane-close": ("Close only the current pane, with protection for running work.", "X closes a pane. Running or unverified work requires confirmation."),
-    "pane-cycle-next": ("Visit the next pane without leaving this tab.", "P cycles panes in the current tab."),
-    "pane-cycle-previous": ("Visit the previous pane without leaving this tab.", "Shift reverses P's pane cycle."),
+    "pane-close": ("Close only the current pane.", "X closes a pane. Running or unverified work asks first by default; Settings can turn pane confirmation off."),
+    "pane-cycle-next": ("Visit the next pane.", "P continues through panes, then tabs, then workspaces, wrapping around the session."),
+    "pane-cycle-previous": ("Visit the previous pane.", "Shift+P reverses the same pane → tab → workspace order."),
     "tab-new": ("Create another tab in the current workspace.", "T creates a tab in this workspace and directory."),
     "tab-close": ("Close this tab and its panes, with protection for running work.", "W closes a tab. Running work requires confirmation."),
-    "tab-previous": ("Visit the previous tab in this workspace.", "PageUp selects the previous tab."),
-    "tab-next": ("Visit the next tab in this workspace.", "PageDown selects the next tab."),
+    "tab-previous": ("Visit the previous tab.", "PageUp selects the previous tab, crossing into the previous workspace at the first tab."),
+    "tab-next": ("Visit the next tab.", "PageDown selects the next tab, crossing into the next workspace at the last tab."),
     "workspace-new": ("Create an entirely new Herdr workspace.", "Shift promotes T from a new tab to a new workspace."),
     "workspace-close": ("Close this whole workspace, with protection for running work.", "Shift promotes W from closing a tab to closing a workspace."),
     "workspace-previous": ("Visit the previous Herdr workspace.", "Shift promotes PageUp from tabs to workspaces."),
@@ -554,7 +554,7 @@ class Quest:
             if self.mode == "hands-on":
                 lines += ["", self.plan.instructions]
         if self.details:
-            lines += ["", "Close drills use fresh idle shells. Normal closes confirm running work. Native Ctrl+Alt+arrows focus panes; Shift resizes. Settings and themes remain in the control menu."]
+            lines += ["", "Close drills use fresh idle shells. Normal closes confirm running work by default; Settings can turn pane confirmation off. Native Ctrl+Alt+arrows focus panes; Shift resizes. Settings and themes remain in the control menu."]
         if self.suspension or self.paused:
             lines += ["", self.suspension or "Paused. Space resumes."]
         elif self.phase == "ready":

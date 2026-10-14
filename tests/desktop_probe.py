@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from herdr_shell import desktop
 from herdr_shell.actions import close_plan
+from herdr_shell.closing import pane_close_confirmation_enabled
 from herdr_shell.runtime import Client, Context, ShellError, run_herdr
 from probe import eventually
 
@@ -202,6 +203,7 @@ def main():
                                for process, options in desktop.find_clients(terminal.pid)]) if terminal else [],
                            "registered": capture(lambda: [b for b in json.loads(run("hyprctl", "-j", "binds"))
                                                           if str(b.get("description", "")).startswith("Herdr Shell:")])}
+                details["snapshot"] = capture(client.snapshot)
                 if terminal:
                     details["lua_candidates"] = capture(lambda: run("hyprctl", "repl", "return (function() "
                         "local b=herdr_shell_bridge; local out={}; "
@@ -238,7 +240,9 @@ def main():
                     return next((w for w in json.loads(run("hyprctl", "-j", "clients")) if w["pid"] == terminal.pid), None)
 
                 win = eventually(window, "owned QA terminal window")
-                monitor = next(m for m in json.loads(run("hyprctl", "-j", "monitors")) if m["id"] == win["monitor"])
+                # Give stacked panes and menus room, rather than using an auxiliary display strip.
+                monitor = max(json.loads(run("hyprctl", "-j", "monitors")),
+                              key=lambda m: m["width"] * m["height"] / m["scale"] ** 2)
                 dimensions = [monitor["width"], monitor["height"]]
                 if monitor["transform"] % 2:
                     dimensions.reverse()
@@ -428,12 +432,39 @@ def main():
                 assert {t["tab_id"] for t in snapshot()["tabs"]} == tabs
                 current_tab = snapshot()["focused_tab_id"]
                 ids = [p["pane_id"] for p in snapshot()["panes"] if p["tab_id"] == current_tab]
-                expected = ids[(ids.index(focused) + 1) % len(ids)]
+                client.call("pane.focus", pane_id=ids[0])
                 herdr_key("p")
-                eventually(lambda: snapshot()["focused_pane_id"] == expected, "next pane in tab")
+                eventually(lambda: snapshot()["focused_pane_id"] == ids[1], "next pane")
                 herdr_key("p", shift=True)
-                eventually(lambda: snapshot()["focused_pane_id"] == focused, "previous pane in tab")
-                checks.append("J rotates a sibling split preserving identities, ratio, focus and tabs; P/Shift+P stay in the current tab")
+                eventually(lambda: snapshot()["focused_pane_id"] == ids[0], "previous pane")
+                checks.append("J rotates a sibling split preserving identities, ratio, focus and tabs; P/Shift+P move between panes")
+
+                first_space = client.call("workspace.create", label="Navigation A", cwd=str(root), focus=True)
+                last_in_first_tab = client.call("pane.split", target_pane_id=first_space["root_pane"]["pane_id"],
+                                               direction="right", focus=False)["pane"]
+                next_tab = client.call("tab.create", workspace_id=first_space["workspace"]["workspace_id"],
+                                       cwd=str(root), focus=False)
+                next_space = client.call("workspace.create", label="Navigation B", cwd=str(root), focus=True)
+                selected_in_next_space = client.call("pane.split", target_pane_id=next_space["root_pane"]["pane_id"],
+                                                    direction="right", focus=True)["pane"]
+                client.call("pane.focus", pane_id=last_in_first_tab["pane_id"])
+                for shift, target in ((False, next_tab["root_pane"]["pane_id"]),
+                                      (False, next_space["root_pane"]["pane_id"]),
+                                      (False, selected_in_next_space["pane_id"]),
+                                      (True, next_space["root_pane"]["pane_id"]),
+                                      (True, next_tab["root_pane"]["pane_id"]),
+                                      (True, last_in_first_tab["pane_id"])):
+                    herdr_key("p", shift=shift)
+                    eventually(lambda: snapshot()["focused_pane_id"] == target, "pane boundary traversal")
+                client.call("pane.focus", pane_id=selected_in_next_space["pane_id"])
+                client.call("pane.focus", pane_id=next_tab["root_pane"]["pane_id"])
+                herdr_key("Page_Down")
+                eventually(lambda: snapshot()["focused_pane_id"] == selected_in_next_space["pane_id"],
+                           "next tab crosses workspace and restores selected pane")
+                herdr_key("Page_Up")
+                eventually(lambda: snapshot()["focused_pane_id"] == next_tab["root_pane"]["pane_id"],
+                           "previous tab crosses workspace")
+                checks.append("P/Shift+P cross tab and workspace boundaries in both directions; PageUp/PageDown cross workspaces and restore selected panes")
 
                 old_tab, count = snapshot()["focused_tab_id"], len(snapshot()["tabs"])
                 herdr_key("t")
@@ -482,11 +513,28 @@ def main():
                 eventually(lambda: not owned_menu_processes(), "last menu toggle closes")
                 checks.append("M toggles the owned menu; rapid close/open presses produce one popup without stacking")
 
-                running = client.call("tab.create", workspace_id=workspace, cwd=str(root), focus=True)["root_pane"]
-                client.call("pane.send_input", pane_id=running["pane_id"], text="sleep 60", keys=["enter"])
-                eventually(lambda: any(p["name"] == "sleep" for p in client.call("pane.process_info", pane_id=running["pane_id"])["process_info"].get("foreground_processes", [])), "owned sleep starts")
+                def start_running_pane():
+                    pane = client.call("tab.create", workspace_id=workspace, cwd=str(root), focus=True)["root_pane"]
+                    client.call("pane.send_input", pane_id=pane["pane_id"], text="sleep 60", keys=["enter"])
+                    eventually(lambda: any(p["name"] == "sleep" for p in client.call("pane.process_info", pane_id=pane["pane_id"])["process_info"].get("foreground_processes", [])), "owned sleep starts")
+                    return pane
+
+                running = start_running_pane()
                 before_ids = identities()
-                for name, shift, page in (("x", False, "confirm-pane-close"), ("w", False, "confirm-tab-close"), ("w", True, "confirm-workspace-close")):
+                pane_confirmation = pane_close_confirmation_enabled()
+                if not pane_confirmation:
+                    herdr_key("x")
+                    expected = {pane_id: identity for pane_id, identity in before_ids.items()
+                                if pane_id != running["pane_id"]}
+                    eventually(lambda: identities() == expected, "X closes running pane with confirmation off")
+                    assert not owned_menu_processes()
+                    checks.append("X closes only its running pane without a prompt when Confirm pane close is Off")
+                    running = start_running_pane()
+                    before_ids = identities()
+                confirmation_keys = [("w", False, "confirm-tab-close"), ("w", True, "confirm-workspace-close")]
+                if pane_confirmation:
+                    confirmation_keys.insert(0, ("x", False, "confirm-pane-close"))
+                for name, shift, page in confirmation_keys:
                     herdr_key(name, shift=shift)
                     eventually(lambda: popup_page(page), "close confirmation " + page)
                     assert len(owned_menu_processes()) == 1
@@ -494,7 +542,8 @@ def main():
                     eventually(lambda: not owned_menu_processes(), "Escape cancels " + page)
                     assert identities() == before_ids
                     assert any(p["name"] == "sleep" for p in client.call("pane.process_info", pane_id=running["pane_id"])["process_info"]["foreground_processes"])
-                checks.append("X, W and Shift+W ask before closing running work; Escape preserves exact panes and running processes")
+                checks.append(("X, W and Shift+W" if pane_confirmation else "W and Shift+W") +
+                              " ask before closing running work; Escape preserves exact panes and running processes")
 
                 assert desktop.enabled() == original_enabled
                 assert run("hyprctl", "configerrors").strip() == original_errors

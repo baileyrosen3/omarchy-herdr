@@ -286,6 +286,14 @@ def _rollback(exc, previous, native_attempted, saved_desktop, desktop_after, hel
     raise exc
 
 
+def _ensure_namers():
+    """Start a tab namer for each reachable server; one that doesn't run this
+    plugin retires itself on its first check."""
+    from . import namer
+    return [str(path) for path in _socket_paths() if namer.ensure(path).get("namer") == "started"]
+
+
+
 def activate():
     """Install or refresh the cached build, restoring only our suspended state."""
     with _locked():
@@ -317,7 +325,8 @@ def activate():
                 or not _owned_helper() or suspended):
             return {"active": True, "native_enabled": bool(native_enabled), "desktop_enabled": desktop.enabled(),
                     "reserved_shortcuts": reserved_shortcuts,
-                    "native_changed": False, "desktop_changed": False, "helper_changed": False, "changed": False}
+                    "native_changed": False, "desktop_changed": False, "helper_changed": False, "changed": False,
+                    "namers_started": _ensure_namers() if native_enabled else []}
         helper_created = native_attempted = False
         saved_desktop = _desktop_backup()
         desktop_after = None
@@ -365,6 +374,7 @@ def activate():
                 "reserved_shortcuts": reserved_shortcuts,
                 "native_changed": native_changed, "desktop_changed": refresh_desktop or profile_changed,
                 "helper_changed": helper_created, **result, **reload_result,
+                "namers_started": _ensure_namers() if native_enabled else [],
                 "changed": bool(result["changed"] or native_changed or refresh_desktop or profile_changed or helper_created)}
 
 
@@ -438,6 +448,8 @@ def deactivate(remove=False):
                     (desktop.preferences_dir() / name).unlink(missing_ok=True)
             for name in ("suspended.json", "setup.json"):
                 (_state() / name).unlink(missing_ok=True)
+        from . import namer
+        namer.stop()
         return {"removed": bool(remove), "active": False, "native_changed": native_attempted,
                 "desktop_changed": desktop_after is not None, "helper_changed": helper_removed,
                 **result, **reload_result,

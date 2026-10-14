@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from herdr_shell import namer, naming
 from herdr_shell.actions import close_plan, execute, execute_close
 from herdr_shell.rotation import _tree, rotation_unavailable
 from herdr_shell.runtime import Client, Context, ShellError
@@ -166,14 +167,68 @@ def exercise(root, client):
         current = client.snapshot()["focused_pane_id"]; focused.append(current)
     assert focused == [p for _, p in agent_panes], focused
     assert close_plan("pane-close", context(client, dict(agent_panes)["idle"]))["needs_confirmation"]
+
+    # Live tab naming. Linking this checkout registers its hooks: the next tab
+    # creation must start the namer, which then follows a real omp-style
+    # terminal title (OSC 0) on a reported agent.
+    client.call("plugin.link", path=str(ROOT), enabled=True)
+    created = client.call("tab.create", workspace_id=origin.workspace, cwd=str(root), focus=False)
+    tab_id, pane_id = created["tab"]["tab_id"], created["root_pane"]["pane_id"]
+    eventually(lambda: namer.running(client.path), timeout=10)
+
+    def title(text, pane=pane_id):
+        client.call("pane.send_text", pane_id=pane, text=f"printf '\\033]0;{text}\\007'\n")
+
+    def label(tab=tab_id):
+        return next(t for t in client.snapshot()["tabs"] if t["tab_id"] == tab)["label"]
+
+    def marked(pane=pane_id):
+        tokens = client.call("pane.get", pane_id=pane)["pane"].get("tokens") or {}
+        return tokens.get(naming.MARKER_TOKEN) == naming.MARKER_VALUE
+
+    client.call("pane.report_agent", pane_id=pane_id, source="herdr-shell-qa", agent="omp", state="working", seq=1)
+    title("π ⠹ Audit workspace labels")
+    eventually(lambda: label() == "Audit workspace labels", timeout=15)
+    assert marked(), "agent pane in a task-named tab must carry the topic marker"
+    for frame in "⠋⠙⠸⠴>":
+        title(f"π {frame} Audit workspace labels")
+    time.sleep(3)
+    log = namer.paths(client.path)[2].read_text()
+    assert log.count(f"tab {tab_id} → ") == 1, log
+
+    client.call("tab.rename", tab_id=tab_id, label="my notes")
+    title("π ⠹ Ship the release")
+    eventually(lambda: not marked(), timeout=10)
+    time.sleep(3)
+    assert label() == "my notes", label()
+    execute("tab-auto-name", context(client, pane_id))
+    eventually(lambda: label() == "Ship the release", timeout=15)
+    assert marked()
+
+    board = client.call("tab.create", workspace_id=origin.workspace, label="card-7", cwd=str(root), focus=False)
+    board_pane = board["root_pane"]["pane_id"]
+    client.call("pane.report_agent", pane_id=board_pane, source="herdr-shell-qa", agent="omp", state="working", seq=1)
+    title("π ⠹ Implement card seven", board_pane)
+    time.sleep(4)
+    assert label(board["tab"]["tab_id"]) == "card-7" and not marked(board_pane)
+
+    client.call("pane.report_agent", pane_id=origin.pane, source="herdr-shell-qa", agent="omp", state="working", seq=2)
+    title("π ⠹ Investigate regression", origin.pane)
+    named_workspace = execute("workspace-new", origin)["workspace"]
+    assert named_workspace["label"] == root.name, named_workspace
+    split = execute("pane-split-right", origin)["pane"]
+    assert client.call("pane.get", pane_id=split["pane_id"])["pane"].get("label") is None
     return {"herdr": client.snapshot()["version"], "passed": [
         "all four split directions place/focus new terminals correctly; all four directional swaps preserve process identities",
         "rotation preserves pane IDs, terminal IDs, shell and running foreground process IDs, ratios and focus",
         "rotation staging tab closes automatically; inverse restores original layout",
-        "nested group refused before mutation; zoomed two-pane descendant rotates and reverses while preserving ratios, terminals, running process, focus, zoom, and staging cleanup",
+        "nested group refused before moving; zoomed two-pane descendant rotates and reverses while preserving ratios, terminals, running process, focus, zoom, and staging cleanup",
         "clean-shell tab closes directly; running command requires confirmation; changed scope refuses close",
         "background sleep requires confirmation and invalidates a prior clean-shell automatic close",
         "real agent focus cycles blocked, done, working, idle despite completion becoming seen",
+        "linked plugin hook starts the namer; an omp-style agent title names its tab once (spinner frames ignored) and marks the agent pane",
+        "manual tab rename pins its name and clears the marker; Name tab from agent task hands it back to the live task",
+        "herdr-board card tabs are never renamed; new workspaces use the project name only; splits stay unlabeled",
     ]}
 
 
@@ -195,6 +250,9 @@ def main():
                 if Path(client.path).exists():
                     client.call("server.stop")
                 proc.wait(timeout=5)
+            # The namer must not outlive its server.
+            eventually(lambda: not namer.running(client.path), timeout=30)
+            print("namer exited with its server")
 
 
 if __name__ == "__main__":

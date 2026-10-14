@@ -9,7 +9,7 @@ import tomllib
 import unittest
 from unittest.mock import Mock, patch
 
-from herdr_shell import cli, config, footer_setup
+from herdr_shell import cli, config, footer_setup, namer
 from herdr_shell import PLUGIN_ID
 from herdr_shell.runtime import ShellError
 
@@ -63,6 +63,7 @@ class InstallTests(unittest.TestCase):
         self.store = config.ConfigStore(path=self.path, state=self.home / 'state', validator=self.validator)
         self.server = Server()
         self.factory = Mock(return_value=self.server)
+        self.ensure = Mock(return_value={'namer': 'started'})
         for patcher in (
             patch.object(cli.Path, 'home', return_value=self.home),
             patch.dict(os.environ, XDG_CONFIG_HOME=str(self.home / 'config'),
@@ -70,6 +71,7 @@ class InstallTests(unittest.TestCase):
             patch.object(config, 'defaults', return_value=DEFAULTS),
             patch.object(cli, 'Client', self.factory),
             patch.object(footer_setup, 'supported', return_value=False),
+            patch.object(namer, 'ensure', self.ensure),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -148,8 +150,11 @@ class InstallTests(unittest.TestCase):
         for options, socket in cases:
             with self.subTest(options=options):
                 self.factory.reset_mock()
+                self.ensure.reset_mock()
                 self.install(*options)
                 self.factory.assert_called_once_with(socket)
+                # The tab namer must follow the same server as the plugin link.
+                self.ensure.assert_called_once_with(socket)
         self.assertNotIn('/wrong/default.sock', [args[0] for args, _ in self.factory.call_args_list])
 
     def test_preflight_validation_failure_has_no_side_effects(self):

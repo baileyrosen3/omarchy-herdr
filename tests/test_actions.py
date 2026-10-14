@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from herdr_shell.actions import execute, open_ui
-from herdr_shell.closing import close_plan, execute_close, shell_jobs
+from herdr_shell.closing import close_plan, execute_close, set_pane_close_confirmation, shell_jobs
 from herdr_shell.navigation import cycle_agent, cycle_pane
 from herdr_shell.rotation import rotate_pane, rotation_unavailable
 from herdr_shell.runtime import ShellError
@@ -37,6 +37,11 @@ class FakeClient:
                      "foreground_processes": [{"pid": 10, "name": "bash"}]})}
         if method == "agent.get":
             return {"agent": deepcopy(next(a for a in self.data["agents"] if a["pane_id"] == params["target"]))}
+        if method == "tab.focus":
+            tab = next(t for t in self.data["tabs"] if t["tab_id"] == params["tab_id"])
+            self.data["focused_pane_id"] = tab.get("focused_pane_id") or next(
+                p["pane_id"] for p in self.data["panes"] if p["tab_id"] == tab["tab_id"])
+            return {"changed": True}
         if method in ("pane.focus", "agent.focus"):
             target = params.get("pane_id") or params["target"]
             self.data["focused_pane_id"] = target
@@ -71,9 +76,17 @@ class SplitSwapTests(unittest.TestCase):
             execute("pane-swap-" + direction, FakeContext(client))
             self.assertEqual(client.calls[-1], ("pane.swap", {"pane_id": "p1", "direction": direction}))
 
-    def test_left_and_up_splits_read_nested_swap_result_and_keep_new_focus(self):
+    def setUp(self):
+        preferences = tempfile.TemporaryDirectory()
+        self.addCleanup(preferences.cleanup)
+        environment = patch.dict(os.environ, HERDR_SHELL_DESKTOP_CONFIG_HOME=preferences.name)
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def test_left_and_up_splits_read_nested_swap_result_keep_focus_and_stay_unlabeled(self):
         for direction, native in (("left", "right"), ("up", "down")):
             client = FakeClient()
+            context = FakeContext(client)
             def call(method, **params):
                 client.calls.append((method, params))
                 if method == "pane.split":
@@ -82,13 +95,26 @@ class SplitSwapTests(unittest.TestCase):
                     return {"swap": {"changed": True}}
                 return {}
             client.call = call
-            result = execute("pane-split-" + direction, FakeContext(client))
+            result = execute("pane-split-" + direction, context)
             self.assertEqual(result["pane"]["pane_id"], "created")
             self.assertEqual(client.calls[0][1]["direction"], native)
-            self.assertEqual(client.calls[1], ("pane.swap", {"source_pane_id": "created", "target_pane_id": "p1"}))
-            self.assertEqual(client.calls[2], ("pane.focus", {"pane_id": "created"}))
+            self.assertEqual(client.calls[1:], [("pane.swap", {"source_pane_id": "created", "target_pane_id": "p1"}),
+                                                ("pane.focus", {"pane_id": "created"})])
 
-    def test_failed_sibling_swap_reports_created_pane(self):
+    def test_new_split_panes_stay_unlabeled_so_clients_show_live_titles(self):
+        client = FakeClient()
+        client.data["panes"][0].update(agent="omp", terminal_title_stripped="π ⠹ Check edge cases")
+        calls = []
+        def call(method, **params):
+            calls.append((method, params))
+            if method == "pane.split":
+                return {"pane": pane("created")}
+            return {}
+        client.call = call
+        execute("pane-split-right", FakeContext(client))
+        self.assertEqual([method for method, _ in calls], ["pane.split"])
+
+    def test_failed_sibling_swap_reports_created_pane_before_naming(self):
         client = FakeClient()
         client.call = Mock(side_effect=[{"pane": pane("created")}, {"swap": {"changed": False}}])
         with self.assertRaisesRegex(ShellError, "Pane created was created down, but could not be moved up"):
@@ -115,8 +141,63 @@ class LearningActionTests(unittest.TestCase):
         self.assertEqual(client.calls, [])
 
 
+
+class AutomaticNamingActionTests(unittest.TestCase):
+    def setUp(self):
+        preferences = tempfile.TemporaryDirectory()
+        self.addCleanup(preferences.cleanup)
+        environment = patch.dict(os.environ, HERDR_SHELL_DESKTOP_CONFIG_HOME=preferences.name)
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.client = FakeClient()
+        self.context = FakeContext(self.client)
+        self.context.cwd = "/work/project"
+
+    def test_new_tab_is_unlabeled_in_the_origin_directory_even_beside_an_agent(self):
+        self.client.data["panes"][0].update(agent="omp", terminal_title_stripped="π ⠹ Review panel names")
+        execute("tab-new", self.context)
+        self.assertEqual(self.client.calls[-1], ("tab.create", {"workspace_id": "w", "cwd": "/work/project", "focus": True}))
+
+    def test_name_tab_from_agent_task_hands_the_tab_back_with_its_position(self):
+        from herdr_shell import namer
+        self.client.data["tabs"].insert(0, {"tab_id": "t0", "workspace_id": "w", "label": "logs"})
+        with patch.object(namer, "ensure") as ensure:
+            execute("tab-auto-name", self.context)
+        self.assertEqual(self.client.calls[-1], ("tab.rename", {"tab_id": "t", "label": "2"}))
+        ensure.assert_called_once_with("test-socket")
+        self.client.data["tabs"] = [tab for tab in self.client.data["tabs"] if tab["tab_id"] != "t"]
+        with patch.object(namer, "ensure"), self.assertRaisesRegex(ShellError, "no longer exists"):
+            execute("tab-auto-name", self.context)
+
+    def test_new_workspace_uses_project_then_branch_and_never_the_agent_task(self):
+        from herdr_shell import naming
+        self.client.data["panes"][0].update(agent="omp", terminal_title_stripped="π ⠹ Investigate regression")
+        self.client.data["workspaces"].append({"workspace_id": "w2", "label": "project"})
+        def git(cwd, *args):
+            return "/repos/project" if args[0] == "rev-parse" else "feature/search"
+        with patch.object(naming, "_git", side_effect=git):
+            execute("workspace-new", self.context)
+        method, params = self.client.calls[-1]
+        self.assertEqual(method, "workspace.create")
+        self.assertEqual(params["label"], "project · feature/search")
+        self.assertEqual(params["cwd"], "/work/project")
+
+    def test_workspace_folder_mode_uses_origin_directory_without_git_lookup(self):
+        from herdr_shell import naming
+        naming.set_preference("workspace_mode", "folder")
+        with patch.object(naming, "_git") as git:
+            execute("workspace-new", self.context)
+        self.assertEqual(self.client.calls[-1][1]["label"], "project")
+        git.assert_not_called()
+
+
 class CloseTests(unittest.TestCase):
     def setUp(self):
+        preferences = tempfile.TemporaryDirectory()
+        self.addCleanup(preferences.cleanup)
+        preference_env = patch.dict(os.environ, HERDR_SHELL_DESKTOP_CONFIG_HOME=preferences.name)
+        preference_env.start()
+        self.addCleanup(preference_env.stop)
         self.client = FakeClient()
         self.context = FakeContext(self.client)
         self.jobs = patch("herdr_shell.closing.shell_jobs", return_value=[])
@@ -176,6 +257,27 @@ class CloseTests(unittest.TestCase):
         self.client.data["agents"] = [pane("p1", agent="codex", agent_status="done")]
         execute("pane-close", self.context, yes=True)
         self.assertEqual(self.client.calls[-1], ("pane.close", {"pane_id": "p1"}))
+
+    def test_pane_close_preference_bypasses_only_pane_prompts_and_can_be_reenabled(self):
+        self.client.data["agents"] = [pane("p1", agent="codex", agent_status="working")]
+        set_pane_close_confirmation(False)
+        execute("pane-close", self.context)
+        self.assertEqual(self.client.calls[-1], ("pane.close", {"pane_id": "p1"}))
+        self.assertFalse(any(method == "plugin.pane.open" for method, _ in self.client.calls))
+
+        for action in ("tab-close", "workspace-close"):
+            with self.subTest(action=action):
+                self.client.calls.clear()
+                execute(action, self.context)
+                self.assertEqual(self.client.calls[-1][0], "plugin.pane.open")
+                self.assertEqual(self.client.calls[-1][1]["env"]["HERDR_SHELL_PAGE"], "confirm-" + action)
+                self.assertFalse(any(method.endswith(".close") for method, _ in self.client.calls))
+
+        set_pane_close_confirmation(True)
+        self.client.calls.clear()
+        execute("pane-close", self.context)
+        self.assertEqual(self.client.calls[-1][0], "plugin.pane.open")
+        self.assertFalse(any(method.endswith(".close") for method, _ in self.client.calls))
 
     def test_confirmed_scope_rejects_new_moved_and_replaced_panes(self):
         for mutate in (lambda c: c.data["panes"].append(pane("p3")),
@@ -250,12 +352,56 @@ class NavigationTests(unittest.TestCase):
         self.env.start(); self.addCleanup(self.env.stop)
         self.client = FakeClient()
 
-    def test_pane_cycle_stays_in_originating_tab_and_wraps(self):
-        self.client.data["panes"].append(pane("other", tab="t2"))
-        cycle_pane(FakeContext(self.client), -1)
-        self.assertEqual(self.client.data["focused_pane_id"], "p2")
-        cycle_pane(FakeContext(self.client, "p2"), 1)
-        self.assertEqual(self.client.data["focused_pane_id"], "p1")
+    def hierarchy(self):
+        self.client.data["workspaces"] = [
+            {"workspace_id": "wa"}, {"workspace_id": "empty"}, {"workspace_id": "wb"}]
+        self.client.data["tabs"] = [
+            {"tab_id": "tc", "workspace_id": "wb", "focused_pane_id": "d"},
+            {"tab_id": "ta", "workspace_id": "wa", "focused_pane_id": "e"},
+            {"tab_id": "td", "workspace_id": "wb", "focused_pane_id": "f"},
+            {"tab_id": "tb", "workspace_id": "wa", "focused_pane_id": "b"}]
+        self.client.data["panes"] = [
+            pane("c", "tc", "wb"), pane("a", "ta", "wa"), pane("f", "td", "wb"),
+            pane("b", "tb", "wa"), pane("d", "tc", "wb"), pane("e", "ta", "wa")]
+        self.client.data["focused_pane_id"] = "a"
+
+    def test_pane_cycle_crosses_tabs_and_workspaces_in_both_directions(self):
+        self.hierarchy()
+        for action, expected in (
+                ("pane-cycle-next", ["e", "b", "c", "d", "f", "a"]),
+                ("pane-cycle-previous", ["f", "d", "c", "b", "e", "a"])):
+            with self.subTest(action=action):
+                self.client.data["focused_pane_id"] = "a"
+                for target in expected:
+                    current = self.client.data["focused_pane_id"]
+                    execute(action, FakeContext(self.client, current))
+                    self.assertEqual(self.client.data["focused_pane_id"], target)
+
+    def test_tab_cycle_crosses_workspaces_and_restores_selected_panes(self):
+        self.hierarchy()
+        for action, expected in (
+                ("tab-next", ["b", "d", "f", "e"]),
+                ("tab-previous", ["f", "d", "b", "e"])):
+            with self.subTest(action=action):
+                self.client.data["focused_pane_id"] = "e"
+                for target in expected:
+                    current = self.client.data["focused_pane_id"]
+                    execute(action, FakeContext(self.client, current))
+                    self.assertEqual(self.client.data["focused_pane_id"], target)
+
+    def test_single_pane_and_tab_keep_focus(self):
+        self.client.data["panes"] = [pane("p1")]
+        for action in ("pane-cycle-next", "pane-cycle-previous", "tab-next", "tab-previous"):
+            execute(action, FakeContext(self.client))
+            self.assertEqual(self.client.data["focused_pane_id"], "p1")
+
+    def test_missing_origin_is_rejected_without_changing_focus(self):
+        origin = FakeContext(self.client)
+        self.client.data["panes"] = [pane("p2")]
+        before = self.client.snapshot()
+        with self.assertRaises(ShellError):
+            cycle_pane(origin, 1)
+        self.assertEqual(self.client.snapshot(), before)
 
     def agents(self):
         self.client.data["panes"] = [pane(p) for p in ("origin", "idle", "working", "done", "blocked", "unknown")]

@@ -36,6 +36,7 @@ fallback keys; explicit native key edits still use the configuration editor.
 | Explicit Hyprland bindings and collision checks | `integrations/hyprland.lua` |
 | Hands-on walkthrough and timed Speed Run | `herdr_shell/trainer.py`, `herdr_shell/practice.py`, `herdr_shell/game_input.py` |
 | Welcome unlock state and read-only walkthrough | `herdr_shell/onboarding.py` |
+| Native pane-spacing extension and builder | `integrations/herdr-native-spacing-v1.patch`, `scripts/build-native-padding.py` |
 
 Keep menu actions, CLI behavior, and manifest entries consistent. After changing
 the catalog or manifest generator:
@@ -73,6 +74,8 @@ user workflow uses Omarchy's add/update/remove commands, as shown in the README.
 
 Validate behavior in isolated sessions before installing into your working
 desktop. Report which checks passed and which live interactions remain unverified.
+GitHub Actions runs the unit suite on Python 3.11 and 3.13 and the isolated
+Omarchy lifecycle probe against pinned Herdr 0.9.3.
 
 To run the checks yourself:
 
@@ -100,6 +103,9 @@ status and desktop-focus checks are explicit headless fixtures; the probe
 neither installs a host bridge nor verifies compositor input. Practice agents
 are harmless simulations; Lazygit uses a temporary repository with a labeled
 simulator fallback when unavailable.
+After RPC focus changes, the trainer probe waits for the attached client's
+rendered focus indicator before sending terminal keys. Server focus snapshots
+alone do not acknowledge the client's keyboard-input target.
 Unit timing checks use a controlled monotonic clock so fixture preparation and
 verification cannot count against player reaction time.
 Check that welcome initially offers only the two walkthroughs, completing either
@@ -122,8 +128,10 @@ input-group permissions. Its Python standard-library fixture creates a temporary
 keyboard named `herdr-shell-qa-<probe PID>`, sends keys only while its own
 disposable foot window is focused, releases held keys and destroys the keyboard
 on exit, and restores the pointer position and original window focus when that
-window still exists. The fixture floats only its own window and moves the pointer
-inside it so mouse-following focus stays predictable. It creates no service or
+window still exists. The fixture floats only its own window on the largest
+logical monitor and moves the pointer inside it so mouse-following focus stays
+predictable. It respects the saved pane-close confirmation preference while
+always checking tab/workspace close protection. It creates no service or
 persistent desktop configuration. If device access is unavailable, report desktop input checks as
 unverified and use the manual guide. Compositor shortcuts must be checked with
 this input fixture; terminal key injection alone does not verify them.
@@ -151,6 +159,69 @@ window. A preference flag alone does not prove the bridge is active.
 Keep Ctrl+Alt directional pane focus strict, with separate tab/workspace chords.
 Agent sweeps must preserve their blocked → done → working → idle order during a
 cycle. Menu and shortcut closes share the running-work confirmation policy.
+
+## Native pane spacing
+
+The native extension targets Herdr v0.9.3, commit
+`7b116c05bfda646af39d2524c54e70c751f57ee8`, with Rust 1.96.1 and Zig 0.16.0.
+`scripts/build-native-padding.py` clones that tag, verifies its commit, applies
+the tracked patch, builds with `--locked`, and checks the explicit
+`{"pane_spacing":1}` capability. It advertises no footer support and changes
+neither protocol 22 nor the endpoint codecs or handoff format.
+
+Spacing defaults are 2 columns / 1 row between panes and 1 column / 1 row at
+tab edges. Horizontal padding is half the gap; vertical padding stays at one
+row rather than disappearing when the one-row gap is halved.
+
+The disposable `tests/probe.py` waits for the native popup frame to disappear
+and for the attached client's focused pane title to render bold before sending
+the next shortcut. TUI text disappearing alone does not establish popup teardown.
+
+```sh
+# Build an isolated candidate, without changing the Herdr command:
+python3 scripts/build-native-padding.py --output /tmp/herdr-padding-candidate
+
+# Or install the user-owned binary and ~/.local/bin/herdr link:
+python3 scripts/build-native-padding.py --install
+
+# Reuse an already-patched checkout at the exact pinned revision:
+python3 scripts/build-native-padding.py --source /path/to/patched-herdr --install
+```
+
+The builder discovers an installed mise Zig 0.16.0 without activating a global
+shim; `ZIG=/absolute/path/to/zig` explicitly overrides it. It refuses unrelated
+executables, unowned directories, symlinked artifacts, changed managed binaries,
+and existing `--output` files. Native installation is separate from the normal
+Omarchy plugin lifecycle; plugin removal does not remove this opted-in binary.
+The patch must be rebased and revalidated before changing the native base version.
+
+If the system PATH precedes `~/.local/bin`, the link alone is not activation.
+Prepend only `~/.local/share/herdr-shell/native-spacing` in the shell and desktop
+environment; that directory contains no other executable names. On Omarchy's
+Lua compositor, use `hl.env("PATH", ...)` after its default environment setup:
+`hyprctl setenv` does not update keybind dispatchers. Keep Omarchy's own bin
+directory and the remaining PATH entries intact. New Fish shells can use
+`fish_add_path --prepend --move --path "$HOME/.local/share/herdr-shell/native-spacing"`.
+Check actual launcher and shell resolution before starting a new server.
+
+Installing alone leaves running servers unchanged. For a working session,
+first prove an old-to-candidate handoff on a disposable server with real
+foreground work. The JSON API method is `server.live_handoff` with an absolute
+`import_exe` path and `expected_protocol=22`, `expected_version="0.9.3"`.
+Use a bounded long-timeout API connection, not a stop/restart or blind retry.
+After success, reopen the terminal view using the installed candidate and check
+public workspace/tab/pane IDs, shell/foreground process PIDs, PTYs, retained
+output, and input. **Upstream handoff allocates new internal terminal IDs**:
+reopen menus and reacquire any stored terminal-ID handles. This is not a promise
+that encoded invocation contexts survive handoff.
+
+Validation needs the actual native surface, not just Python provider tests:
+four live menu edits, zero/reset, Gaps Off/On, lone/zoomed panes, mouse focus,
+and terminal dimensions. Keep the stock capability gate and stock-client
+compatibility checks. The patch includes layout/range/split-hit tests; native
+hot-path architecture and fixed-geometry 1/15-pane profiling cover the shared
+geometry path. `pane.layout` retains the underlying split topology while zoomed;
+check the rendered zoomed pane for its edge margins.
 
 ## Pull requests
 
