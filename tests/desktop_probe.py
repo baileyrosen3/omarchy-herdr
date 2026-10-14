@@ -26,6 +26,7 @@ from herdr_shell.actions import close_plan
 from herdr_shell.closing import pane_close_confirmation_enabled
 from herdr_shell.runtime import Client, Context, ShellError, run_herdr
 from tests.probe_support import eventually
+from tests.desktop_probe_support import read_popup_observation, wait_for_confirmation_ui
 
 
 def run(*args, **kwargs):
@@ -276,6 +277,17 @@ def _run_probe(args):
     with tempfile.TemporaryDirectory(prefix="herdr-desktop-probe-") as directory:
         root = Path(directory)
         env = isolated_probe_environment(root)
+        popup_capture = root / "popup-capture"
+        popup_capture.mkdir()
+        popup_support = root / "popup-support"
+        popup_support.mkdir()
+        (popup_support / "sitecustomize.py").write_text(
+            "import os, sys\n"
+            "if '_menu' in sys.argv:\n"
+            "    from tests.desktop_probe_support import install_popup_observer\n"
+            "    install_popup_observer(os.environ['HERDR_QA_POPUP_CAPTURE'])\n")
+        env.update(PYTHONPATH=os.pathsep.join([str(popup_support), str(ROOT), env.get("PYTHONPATH", "")]),
+                   HERDR_QA_POPUP_CAPTURE=str(popup_capture))
         fakebin = root / "fakebin"
         fakebin.mkdir()
         agent_command = root / "agent-command.json"
@@ -322,6 +334,9 @@ def _run_probe(args):
                            "registered": capture(lambda: [b for b in json.loads(run("hyprctl", "-j", "binds"))
                                                           if str(b.get("description", "")).startswith("Herdr Shell:")])}
                 details["snapshot"] = capture(client.snapshot)
+                details["popup_observations"] = {
+                    path.stem: read_popup_observation(popup_capture, path.stem)
+                    for path in popup_capture.glob("*.json")}
                 if terminal:
                     details["lua_candidates"] = capture(lambda: run("hyprctl", "repl", "return (function() "
                         "local b=herdr_shell_bridge; local out={}; "
@@ -652,12 +667,18 @@ def _run_probe(args):
                 confirmation_keys = [("w", False, "confirm-tab-close"), ("w", True, "confirm-workspace-close")]
                 if pane_confirmation:
                     confirmation_keys.insert(0, ("x", False, "confirm-pane-close"))
+                confirmation_inputs = {}
                 for name, shift, page in confirmation_keys:
                     herdr_key(name, shift=shift)
-                    eventually(lambda: popup_page(page), "close confirmation " + page)
+                    confirmation = wait_for_confirmation_ui(popup_capture, owned_menu_processes, page)
                     assert len(owned_menu_processes()) == 1
                     key("Escape")
                     eventually(lambda: not owned_menu_processes(), "Escape cancels " + page)
+                    observed = read_popup_observation(popup_capture, confirmation["pid"])
+                    assert observed and any(event["key"] == "\x1b" for event in observed["received"]), \
+                        "The confirmation did not record receiving Escape"
+                    confirmation_inputs[page] = {"popup_pid": confirmation["pid"], "title": confirmation["title"],
+                                                 "received_keys": [event["key"] for event in observed["received"]]}
                     assert identities() == before_ids
                     assert any(p["name"] == "sleep" for p in client.call("pane.process_info", pane_id=running["pane_id"])["process_info"]["foreground_processes"])
                 checks.append(("X, W and Shift+W" if pane_confirmation else "W and Shift+W") +
@@ -665,7 +686,8 @@ def _run_probe(args):
 
                 assert desktop.enabled() == original_enabled
                 assert run("hyprctl", "configerrors").strip() == original_errors
-                result = {"herdr": snapshot()["version"], "bindings": len(active), "passed": checks}
+                result = {"herdr": snapshot()["version"], "bindings": len(active), "passed": checks,
+                          "confirmation_inputs": confirmation_inputs}
                 (ROOT / "docs/desktop-checks.json").write_text(json.dumps(result, indent=2) + "\n")
                 print(json.dumps(result, indent=2), flush=True)
             except Exception:
@@ -692,11 +714,11 @@ def _run_probe(args):
                         except subprocess.TimeoutExpired:
                             server.terminate(); server.wait(timeout=5)
                     finally:
-                        if desktop.enabled() != original_enabled:
-                            desktop.set_enabled(original_enabled)
                         move_cursor(original_cursor["x"], original_cursor["y"])
                         if original.get("address") and any(w.get("address") == original["address"] for w in json.loads(run("hyprctl", "-j", "clients"))):
                             focus_window(original["address"])
+                        if desktop.enabled() != original_enabled:
+                            raise RuntimeError("Desktop preferences changed during QA; no configuration was written.")
 
 
 if __name__ == "__main__":

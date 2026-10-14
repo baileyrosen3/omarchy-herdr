@@ -166,6 +166,18 @@ or change socket/device permissions. `python3 -m unittest discover -s tests`
 uses fake hyprctl JSON and temporary socket fixtures, never real compositor
 commands; `import tests.desktop_probe` does not run the probe.
 
+Close-confirmation input additionally waits for the popup's actual refreshed
+curses surface: the matching close title, activity warning, Cancel option, and
+Esc footer must be present while that sole owned popup is awaiting input.
+An `_menu` process and its `HERDR_SHELL_PAGE` environment identify ownership,
+not UI readiness; startup and error dialogs cannot authorize Escape. The probe
+uses a temporary, per-server Python import hook to observe the real popup
+surface and record keys returned by its input reader. Confirmation checks
+require the reader to receive Escape, then verify unchanged pane identities and
+running work. Results include those received keys; failure diagnostics include
+the observed popup text. The hook and observations are removed with the
+disposable fixture, and cleanup never writes desktop preferences.
+
 The full desktop probe includes launch and agent-cycle checks. Add
 `--launches-only` to check only A, V, Q, and Shift+Q after input sanity checks.
 A invokes the normal agent entrypoint through a harmless argument-recording
