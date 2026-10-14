@@ -1,4 +1,9 @@
-"""Opt-in shortcut QA in one disposable foot window and isolated Herdr server."""
+"""Opt-in shortcut QA in one disposable foot window and isolated Herdr server.
+
+Discovery verifies a live Hyprland control socket and selects its Wayland display
+before any desktop checks or input; multiple live instances require an explicit
+valid HYPRLAND_INSTANCE_SIGNATURE.
+"""
 import argparse
 import json
 import fcntl
@@ -6,6 +11,7 @@ import os
 from dataclasses import asdict
 from pathlib import Path
 import re
+import stat
 import subprocess
 import struct
 import sys
@@ -19,11 +25,113 @@ from herdr_shell import desktop
 from herdr_shell.actions import close_plan
 from herdr_shell.closing import pane_close_confirmation_enabled
 from herdr_shell.runtime import Client, Context, ShellError, run_herdr
-from probe_support import eventually
+from tests.probe_support import eventually
 
 
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, capture_output=True, text=True, timeout=10, **kwargs).stdout
+
+
+def select_hyprland_environment(environ=None, *, run_command=None, uid=None):
+    """Return inherited env with a verified, unambiguous compositor and display.
+
+    ``instances`` enumerates lock files even with ``-i``; it does not contact the
+    selected compositor. A read-only ``version`` request verifies its socket.
+    The subprocess seam lets unit checks exercise discovery without Hyprland.
+    """
+    env = dict(os.environ if environ is None else environ)
+    uid = os.getuid() if uid is None else uid
+    runtime = Path(env.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}")
+    if not env.get("XDG_RUNTIME_DIR"):
+        env["XDG_RUNTIME_DIR"] = str(runtime)
+    command = subprocess.run if run_command is None else run_command
+    rejected = {}
+
+    def query(argv, request_env):
+        return command(["hyprctl", *argv], env=request_env, capture_output=True,
+                       text=True, timeout=4, check=False)
+
+    def live(signature):
+        if not isinstance(signature, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", signature) or signature.isdecimal():
+            rejected[str(signature)] = "invalid instance signature"
+            return False
+        control = runtime / "hypr" / signature / ".socket.sock"
+        try:
+            metadata = control.lstat()
+            if not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != uid:
+                rejected[signature] = f"{control} is not a control socket owned by UID {uid}"
+                return False
+            request_env = dict(env, HYPRLAND_INSTANCE_SIGNATURE=signature)
+            result = query(["-i", signature, "-j", "version"], request_env)
+            if result.returncode:
+                rejected[signature] = result.stderr.strip() or result.stdout.strip() or "control socket did not respond"
+                return False
+            version = json.loads(result.stdout)
+            if not isinstance(version, dict) or not isinstance(version.get("version"), str) or not version["version"]:
+                rejected[signature] = "control socket returned no Hyprland version"
+                return False
+            return True
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            rejected[signature] = str(exc)
+            return False
+
+    inherited = env.get("HYPRLAND_INSTANCE_SIGNATURE")
+    inherited_live = live(inherited) if inherited else False
+    try:
+        result = query(["-j", "instances"], env)
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "hyprctl exited unsuccessfully")
+        records = json.loads(result.stdout)
+        if not isinstance(records, list):
+            raise ValueError("expected a JSON array")
+        instances = {}
+        for record in records:
+            if not isinstance(record, dict):
+                raise ValueError("expected instance objects")
+            signature, display = record.get("instance"), record.get("wl_socket")
+            if not isinstance(signature, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", signature) or signature.isdecimal():
+                raise ValueError("invalid instance signature")
+            if not isinstance(display, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", display):
+                raise ValueError(f"invalid wl_socket for {signature}")
+            if signature in instances and instances[signature] != display:
+                raise ValueError(f"conflicting wl_socket values for {signature}")
+            instances[signature] = display
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("Cannot discover Hyprland instances using `hyprctl -j instances`: "
+                           f"{exc}. Run it from the intended Hyprland session and check XDG_RUNTIME_DIR.") from exc
+
+    if inherited_live:
+        if inherited not in instances:
+            raise RuntimeError(f"Hyprland instance {inherited} responds, but `hyprctl -j instances` "
+                               "does not report its Wayland display. Run the probe from that Hyprland session.")
+        selected = inherited
+    else:
+        candidates = [signature for signature in instances
+                      if signature != inherited and live(signature)]
+        if len(candidates) > 1:
+            choices = ", ".join(f"{signature} ({instances[signature]})" for signature in candidates)
+            raise RuntimeError(f"Multiple live Hyprland instances for UID {uid}: {choices}. "
+                               "Set HYPRLAND_INSTANCE_SIGNATURE to the intended instance and rerun; "
+                               "the probe will verify it and set WAYLAND_DISPLAY. Refusing to guess.")
+        if not candidates:
+            details = "; ".join(f"{signature}: {reason}" for signature, reason in rejected.items())
+            raise RuntimeError(f"No live Hyprland control socket for UID {uid} under {runtime}/hypr"
+                               + (f": {details}" if details else ".")
+                               + " Run `hyprctl -j instances` from the intended Hyprland session "
+                                 "and check XDG_RUNTIME_DIR and socket access; no configuration was changed.")
+        selected = candidates[0]
+    env.update(HYPRLAND_INSTANCE_SIGNATURE=selected, WAYLAND_DISPLAY=instances[selected])
+    return env
+
+
+def isolated_probe_environment(root):
+    """Isolate Herdr server context, not inherited compositor preferences."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_") and k != "TMUX"}
+    env.update(XDG_CONFIG_HOME=str(root / "config"), XDG_DATA_HOME=str(root / "data"),
+               XDG_STATE_HOME=str(root / "state"), XDG_CACHE_HOME=str(root / "cache"),
+               HERDR_CONFIG_PATH=str(root / "config.toml"),
+               HERDR_SHELL_DESKTOP_CONFIG_HOME=str(desktop.preferences_dir().parent))
+    return env
 
 
 def focus_window(address):
@@ -139,6 +247,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--launches-only", action="store_true", help="Only verify A, V, Q and Shift+Q after input sanity checks")
     args = parser.parse_args()
+    inherited = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    selected_env = select_hyprland_environment()
+    signature = selected_env["HYPRLAND_INSTANCE_SIGNATURE"]
+    choice = "preserved verified inherited choice" if signature == inherited else "selected sole live instance"
+    if inherited and signature != inherited:
+        choice += f" (replacing stale/unreachable inherited {inherited})"
+    print(f"Desktop probe: {choice}: HYPRLAND_INSTANCE_SIGNATURE={signature}, "
+          f"WAYLAND_DISPLAY={selected_env['WAYLAND_DISPLAY']}; discovery is read-only.", flush=True)
+    with patch.dict(os.environ, selected_env, clear=True):
+        return _run_probe(args)
+
+
+def _run_probe(args):
     original_enabled = desktop.enabled()
     if not desktop.installed() or not original_enabled:
         raise RuntimeError("Install and enable the Super+Alt bridge before running this opt-in test.")
@@ -154,10 +275,7 @@ def main():
     bridge_log_offset = bridge_log.stat().st_size if bridge_log.exists() else 0
     with tempfile.TemporaryDirectory(prefix="herdr-desktop-probe-") as directory:
         root = Path(directory)
-        env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_") and k != "TMUX"}
-        env.update(XDG_CONFIG_HOME=str(root / "config"), XDG_DATA_HOME=str(root / "data"),
-                   XDG_STATE_HOME=str(root / "state"), XDG_CACHE_HOME=str(root / "cache"),
-                   HERDR_CONFIG_PATH=str(root / "config.toml"))
+        env = isolated_probe_environment(root)
         fakebin = root / "fakebin"
         fakebin.mkdir()
         agent_command = root / "agent-command.json"

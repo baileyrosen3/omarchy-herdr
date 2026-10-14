@@ -139,6 +139,29 @@ persistent desktop configuration. If device access is unavailable, report deskto
 unverified and use the manual guide. Compositor shortcuts must be checked with
 this input fixture; terminal key injection alone does not verify them.
 
+Run the desktop probe only when explicitly authorized: it injects real keys into
+the live compositor, even though its Herdr server and terminal are disposable.
+Before checking shortcuts or creating input devices, it preserves an inherited
+`HYPRLAND_INSTANCE_SIGNATURE` only when that UID-owned control socket answers a
+read-only `hyprctl -i <signature> -j version` request. Otherwise it parses
+`hyprctl -j instances` JSON and selects the sole responding instance for this UID.
+Discovery also sets `WAYLAND_DISPLAY` from that instance's `wl_socket` and reports
+the selected signature/display at startup. Directory names and `instances` alone
+are not liveness checks: even `hyprctl -i <signature> instances` only enumerates
+instances. Multiple live instances without a verified explicit signature cause
+an actionable error instead of a guess; set `HYPRLAND_INSTANCE_SIGNATURE` to the
+intended instance and rerun. No live sockets, malformed JSON, or failed discovery
+also stop the probe before input or configuration changes.
+
+Compositor commands inherit the original environment with only the selected
+signature/display updated. The disposable Herdr environment retains these and
+the desktop profile's original config namespace through
+`HERDR_SHELL_DESKTOP_CONFIG_HOME`, while isolating server/pane variables and its
+own XDG configuration. Discovery does not install, reload, toggle bindings,
+or change socket/device permissions. `python3 -m unittest discover -s tests`
+uses fake hyprctl JSON and temporary socket fixtures, never real compositor
+commands; `import tests.desktop_probe` does not run the probe.
+
 The full desktop probe includes launch and agent-cycle checks. Add
 `--launches-only` to check only A, V, Q, and Shift+Q after input sanity checks.
 A invokes the normal agent entrypoint through a harmless argument-recording
