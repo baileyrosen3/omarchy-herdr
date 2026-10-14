@@ -74,8 +74,7 @@ user workflow uses Omarchy's add/update/remove commands, as shown in the README.
 
 Validate behavior in isolated sessions before installing into your working
 desktop. Report which checks passed and which live interactions remain unverified.
-GitHub Actions runs the unit suite on Python 3.11 and 3.13 and the isolated
-Omarchy lifecycle probe against pinned Herdr 0.9.3.
+GitHub Actions runs the unit suite on Python 3.11 and 3.13, the isolated Omarchy lifecycle probe, and the live and trainer probes against pinned stock Herdr 0.9.3.
 
 To run the checks yourself:
 
@@ -83,6 +82,7 @@ To run the checks yourself:
 python3 -m unittest discover -s tests -v
 python3 tests/probe.py
 python3 tests/trainer_probe.py
+python3 tests/actions_probe.py
 python3 tests/omarchy_probe.py --run
 ```
 
@@ -91,6 +91,12 @@ The live probe requires `tmux` and Herdr. It creates disposable Herdr/tmux
 servers under `/tmp` and drives their menus. Read a live probe before running
 it; do not point it at a working session. Generated captures and results are
 local artifacts and are excluded from version control.
+
+The live, trainer, and action probes share `tests/probe_support.py`. Send terminal
+keys only after its focus helper confirms the attached client's rendered pane
+title (and popup absence when needed); RPC replies and server focus snapshots
+alone do not acknowledge the keyboard-input target. Their JSON results record
+the resolved Herdr executable path and explicit native pane-spacing capability.
 
 The trainer probe exercises the read-only walkthrough, ordered Hands-on, and
 shuffled Speed Run in a temporary plugin copy and real Herdr/curses session.
@@ -103,9 +109,6 @@ status and desktop-focus checks are explicit headless fixtures; the probe
 neither installs a host bridge nor verifies compositor input. Practice agents
 are harmless simulations; Lazygit uses a temporary repository with a labeled
 simulator fallback when unavailable.
-After RPC focus changes, the trainer probe waits for the attached client's
-rendered focus indicator before sending terminal keys. Server focus snapshots
-alone do not acknowledge the client's keyboard-input target.
 Unit timing checks use a controlled monotonic clock so fixture preparation and
 verification cannot count against player reaction time.
 Check that welcome initially offers only the two walkthroughs, completing either

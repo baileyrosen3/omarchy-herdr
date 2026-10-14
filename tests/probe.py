@@ -16,20 +16,7 @@ from herdr_shell import PLUGIN_ID
 from herdr_shell.actions import execute, open_ui
 from herdr_shell.config import ConfigStore, shortcut_changes
 from herdr_shell.runtime import Client, Context, ShellError, run_herdr
-
-
-def eventually(predicate, label, timeout=8):
-    deadline = time.monotonic() + timeout
-    last = None
-    while time.monotonic() < deadline:
-        try:
-            last = predicate()
-            if last:
-                return last
-        except (ShellError, OSError) as exc:
-            last = exc
-        time.sleep(.08)
-    raise AssertionError(f"Timed out: {label}; last result {last}")
+from probe_support import TmuxSession, eventually, herdr_details
 
 
 def exercise(root, client):
@@ -60,37 +47,14 @@ def exercise(root, client):
     client.call("pane.focus", pane_id=context.pane)
     client.call("pane.rename", pane_id=context.pane, label="Probe keyboard target")
 
-    tmux_socket = root / "tmux.sock"
-    def tmux(*args):
-        terminal_env = {k: v for k, v in os.environ.items() if k not in
-                        ("HERDR_ENV", "HERDR_PANE_ID", "HERDR_WORKSPACE_ID", "HERDR_TAB_ID")}
-        result = subprocess.run(["tmux", "-S", str(tmux_socket), *args], capture_output=True,
-                                text=True, timeout=8, env=terminal_env)
-        if result.returncode:
-            raise RuntimeError(result.stderr)
-        return result.stdout
-
-    def screen():
-        return tmux("capture-pane", "-p", "-t", "qa:0.0")
-
-    def keyboard_target_ready():
-        # Popup text can disappear before the attached client has rendered its
-        # return to pane focus. Bold titles identify actual client key routing,
-        # rather than merely the server snapshot's selected pane.
-        captured = tmux("capture-pane", "-p", "-e", "-t", "qa:0.0")
-        return ("\x1b[1m Probe keyboard target " in captured and
-                "┌Herdr Shell" not in screen())
-
-    def keys(*args):
-        tmux("send-keys", "-t", "qa:0.0", *args)
-
-    def literal(value):
-        tmux("send-keys", "-t", "qa:0.0", "-l", value)
+    tmux = TmuxSession(root / "tmux.sock", "qa:0.0")
+    screen, keys, literal = tmux.screen, tmux.keys, tmux.literal
 
     (root / "tmux.conf").write_text('set -g remain-on-exit on\n')
     tmux("-f", str(root / "tmux.conf"), "new-session", "-d", "-s", "qa", "-x", "132", "-y", "44", "herdr")
     try:
         eventually(lambda: "Shell QA" in screen(), "Herdr terminal attach")
+        tmux.wait_focus("Probe keyboard target", "initial attached client keyboard focus")
         keys("C-Space", "Space")
         eventually(lambda: "Welcome to Herdr Shell" in screen(), "first-use welcome")
         keys("Enter")
@@ -100,7 +64,7 @@ def exercise(root, client):
         keys("Left")
         eventually(lambda: "One shortcut family" in screen(), "walkthrough previous page")
         keys("Escape")
-        eventually(keyboard_target_ready, "walkthrough dismissal restores pane focus")
+        tmux.wait_focus("Probe keyboard target", "walkthrough dismissal restores pane focus", popup_absent="┌Herdr Shell")
         keys("C-Space", "Space")
         eventually(lambda: "HERDR  ×  OMARCHY" in screen(), "menu shortcut opens popup")
         assert "Welcome to Herdr Shell" not in screen()
@@ -112,7 +76,7 @@ def exercise(root, client):
         keys("End")
         eventually(lambda: "26/26" in screen() and "Close menu" in screen(), "all shortcuts reachable on Home")
         keys("Enter")
-        eventually(keyboard_target_ready, "menu reference dismissal restores pane focus")
+        tmux.wait_focus("Probe keyboard target", "menu reference dismissal restores pane focus", popup_absent="┌Herdr Shell")
         keys("C-Space", "Space")
         eventually(lambda: "HERDR  ×  OMARCHY" in screen(), "Home reopens in the shared menu")
         checks.append("Home retains 26 shortcuts and its menu action dismisses instead of reopening")
@@ -131,7 +95,7 @@ def exercise(root, client):
         eventually(lambda: tomllib.loads(store.read())["keys"].get("zoom") == "prefix+f", "binding saved")
         eventually(lambda: "Saved and reloaded" in screen(), "successful save feedback")
         keys("Escape", "Escape", "Escape")
-        eventually(keyboard_target_ready, "popup Escape restores pane focus")
+        tmux.wait_focus("Probe keyboard target", "popup Escape restores pane focus", popup_absent="┌Herdr Shell")
         keys("C-Space", "f")
         eventually(lambda: client.snapshot()["layouts"][0]["zoomed"], "reloaded shortcut works in client")
         keys("C-Space", "f")
@@ -146,7 +110,7 @@ def exercise(root, client):
         eventually(lambda: "zoom" not in tomllib.loads(store.read())["keys"], "undo removes only added key")
         eventually(lambda: "Undone and reloaded" in screen(), "undo feedback")
         keys("Escape")
-        eventually(keyboard_target_ready, "undo menu restores pane focus")
+        tmux.wait_focus("Probe keyboard target", "undo menu restores pane focus", popup_absent="┌Herdr Shell")
         checks.append("live configuration undo")
 
         keys("C-Space", "Space")
@@ -169,6 +133,7 @@ def exercise(root, client):
 
         client.call("popup.close")
         eventually(lambda: "HERDR  ×  OMARCHY" not in screen(), "settings popup closes")
+        tmux.wait_focus("Probe keyboard target", "settings dismissal restores pane focus", popup_absent="┌Herdr Shell")
         checks.append("settings popup and terminal resize")
 
         command = shlex.join([sys.executable, str(ROOT / "bin/herdr-shell"), "--socket", client.path,
@@ -193,6 +158,7 @@ def exercise(root, client):
                         "python3", "-c", "import time; print('HERDR_TOOL_PROBE', flush=True); time.sleep(1)"])})
         eventually(lambda: "HERDR_TOOL_PROBE" in screen(), "tool entrypoint runs argv command")
         eventually(lambda: "HERDR_TOOL_PROBE" not in screen(), "tool exit restores terminal")
+        tmux.wait_focus("Probe keyboard target", "tool exit restores pane focus", popup_absent="┌Herdr Shell")
         checks.append("tool popup launch and automatic close")
 
         # The close policy skips confirmation for idle shells. Run disposable
@@ -214,6 +180,7 @@ def exercise(root, client):
         eventually(lambda: "keep the pane" in screen(), "registered close action asks for confirmation")
         keys("Escape")
         eventually(lambda: "keep the pane" not in screen(), "cancel close confirmation")
+        tmux.wait_focus("Probe keyboard target", "close cancellation restores pane focus", popup_absent="┌Herdr Shell")
         assert len(client.snapshot()["panes"]) == before_panes
         assert running_sleep()["pid"] == running["pid"]
         keys("C-c")
@@ -230,7 +197,7 @@ def exercise(root, client):
         raise
     finally:
         tmux("kill-server")
-    result = {"herdr": client.snapshot()["version"], "passed": checks}
+    result = {"herdr": client.snapshot()["version"], **herdr_details(), "passed": checks}
     (ROOT / "docs/live-checks.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2), flush=True)
 

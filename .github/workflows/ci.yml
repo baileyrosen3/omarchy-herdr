@@ -59,3 +59,49 @@ jobs:
           sudo install /tmp/herdr /usr/local/bin/herdr
       - name: Run isolated lifecycle probe
         run: python3 tests/omarchy_probe.py --run
+
+  live-probes:
+    name: Live probes (Herdr 0.9.3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install probe dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes git tmux lua5.4
+          sudo ln -s "$(command -v lua5.4)" /usr/local/bin/lua
+          sudo ln -s "$(command -v luac5.4)" /usr/local/bin/luac
+          python -m pip install tomlkit
+      - name: Install pinned Herdr 0.9.3
+        run: |
+          curl --fail --location --silent --show-error \
+            https://github.com/herdrdev/herdr/releases/download/v0.9.3/herdr-linux-x86_64 \
+            --output /tmp/herdr
+          echo "18a8dc65f1c2fa485884344356dea1cfd911c6f06cf46fa78e193f4087f4dba7  /tmp/herdr" | sha256sum --check
+          chmod +x /tmp/herdr
+          sudo install /tmp/herdr /usr/local/bin/herdr
+      - name: Run live probe
+        run: python3 tests/probe.py
+        env:
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
+          TERM: xterm-256color
+      - name: Run trainer probe
+        if: success() || failure()
+        run: python3 tests/trainer_probe.py
+        env:
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
+          TERM: xterm-256color
+      - name: Upload probe artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-probe-artifacts
+          path: |
+            docs/*.json
+            docs/*capture*.txt
+          if-no-files-found: ignore

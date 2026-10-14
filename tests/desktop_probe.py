@@ -19,7 +19,7 @@ from herdr_shell import desktop
 from herdr_shell.actions import close_plan
 from herdr_shell.closing import pane_close_confirmation_enabled
 from herdr_shell.runtime import Client, Context, ShellError, run_herdr
-from probe import eventually
+from probe_support import eventually
 
 
 def run(*args, **kwargs):
