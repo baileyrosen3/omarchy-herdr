@@ -111,6 +111,8 @@ def parser():
     worker = sub.add_parser("_worker", help=argparse.SUPPRESS)
     worker.add_argument("--after-pid", type=int, required=True)
     worker.add_argument("--job", required=True)
+    namer = sub.add_parser("_namer", help=argparse.SUPPRESS)
+    namer.add_argument("namer_command", choices=["run", "ensure", "stop"])
     return p
 
 
@@ -189,7 +191,8 @@ def install(args, store):
         if not destination.is_symlink() or destination.resolve() != source:
             raise ShellError(f"{destination} already belongs to another installation.")
     store.validator(proposal["after"])
-    client = Client(resolve_socket(args))
+    socket_path = resolve_socket(args)
+    client = Client(socket_path)
     plugins = client.call("plugin.list").get("plugins", [])
     previous = next((p for p in plugins if p["plugin_id"] == PLUGIN_ID), None)
     made_helper = False
@@ -226,7 +229,9 @@ def install(args, store):
         if failures:
             raise ShellError(str(exc) + "; plugin setup rollback failed: " + "; ".join(failures)) from exc
         raise
-    return {"installed": PLUGIN_ID, "cli": str(destination), "reserved_shortcuts": reserved_shortcuts, **result}
+    from . import namer
+    return {"installed": PLUGIN_ID, "cli": str(destination), "reserved_shortcuts": reserved_shortcuts,
+            **namer.ensure(socket_path), **result}
 
 
 def dispatch(args):
@@ -235,6 +240,15 @@ def dispatch(args):
         return omarchy.dispatch(args)
     if args.socket and args.session:
         raise ShellError("Choose either --socket or --session, including options before and after the command.")
+    if args.command == "_namer":
+        from . import namer
+        try:
+            path = resolve_socket(args)
+        except ShellError:
+            if args.namer_command != "stop":
+                raise
+            path = None
+        return namer.dispatch(args.namer_command, path)
     if args.config:
         os.environ["HERDR_CONFIG_PATH"] = str(Path(args.config).expanduser().resolve())
     store = ConfigStore()

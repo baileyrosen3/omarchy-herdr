@@ -10,13 +10,28 @@ from .runtime import ShellError, state_path
 PRIORITY = {"blocked": 0, "done": 1, "working": 2, "idle": 3}
 
 
+def _ordered_tabs(snapshot):
+    workspace_order = {w["workspace_id"]: i for i, w in enumerate(snapshot["workspaces"])}
+    return sorted(snapshot["tabs"], key=lambda tab: workspace_order[tab["workspace_id"]])
+
+
 def cycle_pane(context, step):
-    panes = [p for p in context.client.snapshot()["panes"] if p["tab_id"] == context.tab]
+    snapshot = context.client.snapshot()
+    tab_order = {tab["tab_id"]: i for i, tab in enumerate(_ordered_tabs(snapshot))}
+    panes = sorted(snapshot["panes"], key=lambda pane: tab_order[pane["tab_id"]])
     ids = [p["pane_id"] for p in panes]
     if context.pane not in ids:
-        raise ShellError("The originating pane is no longer in this tab.")
+        raise ShellError("The originating pane is no longer in this session.")
     target = ids[(ids.index(context.pane) + step) % len(ids)]
     return context.client.call("pane.focus", pane_id=target)
+
+
+def cycle_tab(context, step):
+    ids = [tab["tab_id"] for tab in _ordered_tabs(context.client.snapshot())]
+    if context.tab not in ids:
+        raise ShellError("The original tab no longer exists.")
+    target = ids[(ids.index(context.tab) + step) % len(ids)]
+    return context.client.call("tab.focus", tab_id=target)
 
 
 def _identity(agent):

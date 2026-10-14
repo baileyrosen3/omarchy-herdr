@@ -209,6 +209,43 @@ class OmarchyTests(unittest.TestCase):
         run.assert_called_once_with('deactivate', remove=True)
         self.assertTrue((self.runtime / 'bin/herdr-shell').exists())
 
+    def test_remove_during_payload_read_cleans_up_without_error_backoff(self):
+        revision = self.copied()
+        read_bytes = Path.read_bytes
+        sleeps = []
+
+        def disappearing_read(path):
+            if path == self.source / 'herdr_shell/managed.py':
+                import shutil
+                shutil.rmtree(self.source)
+            return read_bytes(path)
+
+        def tick(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) >= 5:
+                raise EndLoop()
+
+        with patch.object(omarchy, 'ROOT', self.runtime), \
+                patch.object(Path, 'read_bytes', disappearing_read), \
+                patch.object(omarchy.time, 'monotonic', return_value=100), \
+                patch.object(omarchy.time, 'sleep', side_effect=tick), \
+                patch.object(omarchy, 'run_runtime', return_value='removed') as run:
+            try:
+                result = omarchy.watch(self.source, revision)
+            except EndLoop:
+                self.fail('Removal cleanup was delayed by snapshot error backoff: ' + repr(omarchy.status()))
+        self.assertEqual(result, {'removed': True})
+        run.assert_called_once_with('deactivate', remove=True)
+        self.assertEqual(omarchy.status()['state'], 'removed')
+
+    def test_enabled_runtime_error_keeps_retry_backoff(self):
+        revision = self.copied()
+        with patch.object(omarchy.time, 'monotonic', return_value=100), \
+                patch.object(omarchy, 'run_runtime', side_effect=ShellError('activation failed')) as run:
+            self.loop(revision, ticks=5)
+        run.assert_called_once_with('activate')
+        self.assertEqual(omarchy.status()['state'], 'error')
+
     def test_hot_update_restarts_supervisor_with_fresh_runtime(self):
         old = self.copied()
         (self.source / 'herdr_shell/omarchy.py').write_text('new_code = True\n')

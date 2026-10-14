@@ -26,9 +26,10 @@ omarchy plugin add https://github.com/baileyrosen3/omarchy-herdr.git --enable
 ```
 
 Omarchy clones the repository automatically. The companion sets up Herdr and
-free desktop shortcuts in the background within a few seconds. If Herdr is not
-running yet, open it normally; no restart is needed. Add `~/.local/bin` to `PATH`
-for `herdr-shell`.
+free desktop shortcuts in the background within a few seconds. Tabs follow the
+task title of the agent running in them and new workspaces take the project name;
+adjust both in **Settings → Behavior → Names**. If Herdr is not running yet, open
+it normally; no restart is needed. Add `~/.local/bin` to `PATH` for `herdr-shell`.
 
 **Migrating from a developer-linked installation?** From any Herdr pane, run
 `herdr-shell remove --apply` before the Omarchy add command. It keeps the old
@@ -58,34 +59,46 @@ Hold **Super+Alt**, then press the key below. Shift is written explicitly.
 | **J** | Rotate the nearest two-pane split between stacked and side by side |
 | **Z** | Zoom / restore the pane |
 | **X** | Close the pane |
-| **P / Shift+P** | Next / previous pane in this tab |
+| **P / Shift+P** | Next / previous pane, continuing through tabs and workspaces |
 | **T / W** | Create / close a tab |
 | **Shift+T / Shift+W** | Create / close a workspace |
-| **PageUp / PageDown** | Previous / next tab |
+| **PageUp / PageDown** | Previous / next tab, continuing through workspaces |
 | **Shift+PageUp / Shift+PageDown** | Previous / next workspace |
 | **A** | Start your default Omarchy agent in a pane to the right |
 | **Q / Shift+Q** | Next / previous agent by priority |
 | **V** | Open Lazygit in a pane to the right |
 
 Omarchy's native **Ctrl+Alt+arrows** focus neighboring panes; focus stops at an
-edge. **Ctrl+Alt+Shift+arrows** resize. Tab, workspace, and pane cycles wrap.
+edge. **Ctrl+Alt+Shift+arrows** resize. **P** goes to the next pane, then the next
+tab's first pane, then the next workspace. **Shift+P** reverses that order.
+**PageUp/PageDown** switch tabs across workspace boundaries, restoring each tab's
+selected pane. These pane/tab cycles wrap around the session; **Shift+PageUp/PageDown**
+jump directly between workspaces. Native Herdr pane/tab cycle keys keep their
+native scope; these cross-workspace commands use the Super+Alt profile or menu.
 New panes, tabs, workspaces, agents, and Lazygit inherit the originating directory.
-
+New workspaces take the Git project name (or the directory outside Git). Tabs
+take the task title of the agent running in them, and split panes stay unlabeled
+(see [Names](#names)).
 Agent sweeps visit **approval/input → done → working → idle**, keeping their order
 stable through each sweep so status changes cannot trap you on one agent.
-Closing an idle shell runs directly; agents, running work, and uncertain activity
-require confirmation with **Cancel selected first**. Tab/workspace close checks
-all affected panes. Menu and direct close commands use the same policy.
+Closing an idle shell runs directly; by default, agents, running work, and uncertain
+activity require confirmation with **Cancel selected first**. Turn off **Confirm
+pane close** in Settings to close panes immediately. Tab/workspace close still
+checks all affected panes. Menu and direct close commands use the same policy.
 
 ## The control menu
 
-Home is a grouped, **one-line shortcut sheet covering all 26 chords**. Inactive or
-limited commands remain visible with a marker; **F1** explains the selected action,
-its full chord, and any restriction. Other sections are All, Launch, Navigate,
-Panes, Workspaces, and Configure. Search reaches every command and destination.
+Home uses the **same header, sidebar, action list, and details layout** as every
+other main section. It retains **all 26 direct shortcuts**, with full chords and
+live availability markers. **F1** explains the selected action and any restriction.
+Sections are ordered by purpose: **Home, Panes, Tabs, Workspaces, Agents, Tools,
+Settings, Learn, All**. Panes groups creation/arrangement, focus/navigation, and
+resizing/closing; All follows the same logical groups instead of alphabetic order.
+Search reaches every action regardless of the selected section.
 
-Type to search, **↑↓** to select, **Enter** to act, **Tab/Shift+Tab** to change
-sections, and **Esc** to clear search, go back, or close. **F2** opens Keybindings,
+Type to search, **↑↓** to select, **Enter** to act, **Tab/Shift+Tab** or **←/→** to
+change sections (categories inside Settings), and **Esc** to clear search, go back,
+or close. **F2** opens Keybindings,
 **Ctrl+O/F3** Settings, **Ctrl+R** refreshes, and **Ctrl+Z/F4** reviews config undo.
 Search and selection survive editing and refresh. The menu uses your terminal
 palette and retains the Herdr/Omarchy branding; minimum size is **46 × 16**.
@@ -141,11 +154,116 @@ browsing-only view. Esc stops unchanged simulators while keeping practice spaces
 ## Settings and tools
 
 Browse native defaults/overrides, edit or disable shortcuts, and inspect conflicts.
-Super+Alt profile rows show live status and are read-only. Settings and native key
+Super+Alt profile rows show live status and are read-only. Native settings and key
 edits offer a diff before apply/reload; undo preserves unrelated later changes.
 Installation keeps your theme. **Use terminal colors** optionally makes Herdr's
 main interface follow your terminal palette. Editor and file-browser popups,
 pane/tab/workspace pickers, and moving panes are available from the menu.
+
+Settings is organized into five categories:
+
+| Category | Values |
+| --- | --- |
+| **Layout** | Pane gaps and edge padding, borders, scrollbars, tab bar, sidebar |
+| **Appearance** | Theme, agent indicators and sorting |
+| **Behavior** | Close confirmations, tab and workspace names, new-pane directory, clipboard |
+| **Notifications** | Toast delivery and sound |
+| **Controls** | Super+Alt profile, keybindings and desktop integration |
+
+**Tab/Shift+Tab** or **←/→** cycles categories. Search spans all categories;
+clearing it restores the originating category, selected value, and scroll.
+Subpage navigation, edits, and refresh preserve the current category.
+
+**Confirm pane close** is **On** by default. Open Settings with **Ctrl+O/F3**,
+switch to **Behavior**, select this toggle, and press **Enter** to switch it
+**Off** and save immediately.
+With it off, **Super+Alt+X** and the menu's Close pane action close without a
+confirmation, including panes with running agents or commands. The choice
+persists across menu reopens and restarts; tab and workspace confirmations are
+unchanged. Toggle it back on to restore the activity-aware prompt.
+
+### Names
+
+**Tab names** default to **Agent task**: each tab follows the task title of the
+agent running in it (the agent's own terminal title, such as omp's session
+title, or else the chat title that herdr-agent-usage publishes), shortened at a
+word boundary to fit the tab bar, for example `Complete cast and…`. A new title
+must hold for two seconds, and a tab is renamed at most every ten seconds, so
+spinner frames never flicker. When the agent exits, the tab keeps its last task
+name. **Herdr default** shows tab positions instead.
+
+Automatic names only replace Herdr's default (a tab's position) or a name they
+set themselves. A tab you rename keeps your name, as do names from other tools
+such as herdr-board's `card-…` tabs. **Name tab from agent task** (menu → Tabs)
+hands a tab back. One background namer per Herdr server watches tab and agent
+changes, so tabs created anywhere are covered: Herdr's own keys, Heeler, and other
+plugins. Existing non-default names, including directory names from earlier
+versions, are preserved unless the ownership ledger identifies them as automatic.
+Its log is in `~/.local/state/herdr-shell/namer/`.
+
+**New workspace names** default to **Project**: the Git root's directory name,
+falling back to the current directory. A duplicate gets its Git branch when
+available, then a `· 2`, `· 3`, … suffix; **Working directory** always uses the
+directory. Workspace names never change after creation, because herdr-board finds
+workspaces by name and the Herdr agents sidebar groups by it. Panes stay
+unlabeled, so clients such as Heeler keep showing each terminal's live title.
+
+Agent panes in a tab named from their task carry the metadata token
+`herdr_shell_tab_label = "topic"`, so dashboards that keep prompt text out of
+agent names, such as Xeneon Edge, can skip that tab label. Choices are plugin
+preferences in `$XDG_CONFIG_HOME/herdr-shell/naming.json` (default
+`~/.config/herdr-shell/naming.json`), separate from Herdr's native config and
+preserved across Omarchy plugin updates.
+
+### Pane spacing
+
+Open **Super+Alt+M → Settings → Layout** (or **Ctrl+O/F3** in the menu).
+A spacing-enabled native build adds four controls below **Gaps between panes**:
+
+| Control | Native key | Default |
+| --- | --- | --- |
+| Pane gap (columns) | `ui.pane_gap_horizontal` | 2 |
+| Pane gap (rows) | `ui.pane_gap_vertical` | 1 |
+| Tab edge padding (columns) | `ui.tab_padding_horizontal` | 1 |
+| Tab edge padding (rows) | `ui.tab_padding_vertical` | 1 |
+
+Horizontal edge padding is half the horizontal gap. Both vertical defaults stay
+at one row so the edge margin remains visible without enlarging split-pane gaps.
+
+Values display as plain numbers; the control label identifies columns or rows.
+The four values are independent whole numbers **0–65535**. A gap of **0** leaves
+**no blank space** between panes and uses one shared divider when borders are
+enabled—not two adjacent borders. A positive gap of **N** leaves exactly **N**
+blank cells between pane borders. Horizontal and vertical gaps work independently.
+Padding **0** adds no edge margin; padding **N** adds **N** blank cells at each
+matching tab edge. Choose padding independently of the gaps; there is no automatic
+scaling or minimum gap. Values larger than the available pane area are clamped.
+
+Padding is inside the tab's pane area, not the tab labels, sidebar, or popups.
+**Gaps Off** removes both gaps and margins without discarding their saved values.
+Edits preview a diff and apply live; **Ctrl+D** restores the inherited default
+and **Ctrl+Z/F4** reviews undo.
+
+Stock Herdr 0.9.3 ignores these numeric fields, so its menu hides the controls.
+Support requires the explicit `{"pane_spacing":1}` client capability—not just
+a version or a successful config check. The opt-in native extension is pinned
+and reproducible:
+
+```sh
+mise install zig@0.16.0
+python3 scripts/build-native-padding.py --install
+```
+
+Run this from the plugin checkout with Git, Cargo/Rustup, and the pinned Rust
+toolchain available. It installs a user-owned binary under
+`~/.local/share/herdr-shell/native-spacing/` and a `~/.local/bin/herdr` link;
+**`/usr/bin/herdr` stays untouched**. If `/usr/bin` wins PATH resolution, prepend
+only the native-spacing directory in both your shell and desktop launchers.
+Regular plugin installation never builds or replaces native Herdr. The build
+does not refresh running servers. See
+[native build and live-refresh details](CONTRIBUTING.md#native-pane-spacing)
+before activating it in a working session. Native `herdr update` can replace
+this extension with stock code; future native releases need the patch maintained.
 
 ```sh
 herdr-shell desktop status

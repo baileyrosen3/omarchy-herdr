@@ -1,6 +1,6 @@
 # Herdr × Omarchy UI/UX audit
 
-Updated: 2026-10-01. Original menu review: 2026-09-15.
+Updated: 2026-10-06. Original menu review: 2026-09-15.
 
 Reviewed the control-menu structure, search, keybindings, settings, destination
 pickers, previews, undo, desktop integration, and action dispatch. The shortcut
@@ -27,9 +27,10 @@ replacement uses dedicated Super+Alt commands and refuses occupied chords.
 | High | Shortcut close bypassed confirmation for running work. | Use one close policy for the menu and shortcuts: idle shells close directly; running or unknown work prompts with Cancel selected first. Check all panes before closing a tab or workspace. |
 | Medium | Applying, refreshing, and reloading offered little feedback. | Show in-progress and completion messages. Reload configuration now keeps the menu open. |
 | Visual | Omarchy's solid mark dominated Herdr's dotted ram. | Convert both official source logos to the same braille texture. |
-| Visual | Large branding and repeated directory details consumed editing space. | Use compact headers on Home and subpages; keep logos on other main-menu sections; remove the repeated directory panel. |
-| Visual | Long lists retained double spacing even when it forced unnecessary scrolling. | Use single spacing when the entries do not fit with gaps. Add above/below indicators. |
-| Visual | Home showed only a subset of direct shortcuts and repeated long descriptions. | Show all 26 added shortcuts in a compact grouped sheet. State the shared Super+Alt modifiers once, keep Shift explicit, and leave full explanations in F1 help. |
+| Visual | Home used a separate shortcut-sheet renderer and did not match the other main sections. | Share the branded header, section rail, grouped list, and responsive details pane across all main sections; keep compact headers on editing subpages and short terminals. |
+| Visual | Long lists retained double spacing even when it forced unnecessary scrolling. | Use compact action rows with display-only group headings. Budget headings and selected rows together; retain above/below indicators and selection across resizing. |
+| Visual | Home showed only a subset of direct shortcuts and repeated long descriptions. | Keep all 26 shortcuts with full Super+Alt/Shift chords and live availability; show explanations in the shared details pane or F1 help. |
+| Medium | Action sections mixed unrelated destinations, and Settings put every value in one list. | Order actions by purpose; categorize Settings as Layout, Appearance, Behavior, Notifications, and Controls. Search spans categories and clearing it restores the originating category and selection. |
 | High | The learning game asked for Enter before every mission, showed every answer, and awarded fixed points unrelated to speed. | Retain the read-only Walkthrough, add untimed Hands-on demonstrations and shuffled Speed Run goals; auto-prepare and advance targets, count active reaction time, and reward speed and accuracy. |
 
 The appearance adjustments are design judgments informed by the original
@@ -82,21 +83,21 @@ create, move, or close terminals.
 
 ### 1. Main menu and all sections
 
-1. Open Super+Alt+M. Home should show all 26 added shortcuts in groups, with
-   a shared Super+Alt instruction and explicit Shift combinations. Check the
-   originating workspace/tab and actual integration status. Home should have
-   no repeated description lines or large logos.
-2. Cycle Home, All, Launch, Navigate, Panes, Workspaces, and Configure with Tab;
-   reverse with Shift+Tab or Left. Only the action row should be filled.
-3. In All, use Up/Down, Page Up/Down, Home, and End. Long lists should use
-   compact spacing and show an arrow when more rows exist above/below.
+1. Open Super+Alt+M. At a wide size, Home should use the same branded header,
+   section rail, grouped list, and details pane as Panes or All. Check the
+   originating workspace/tab and actual integration status.
+2. Cycle Home, Panes, Tabs, Workspaces, Agents, Tools, Settings, Learn, and All
+   with Tab; reverse with Shift+Tab or Left. Only the action row should be filled.
+3. In Panes, check Create & arrange, Focus & navigate, and Resize & close.
+   In All, use Up/Down, Page Up/Down, Home, and End. Display-only headings must
+   not become selected actions; arrows should indicate rows above/below.
 4. Select an item and press F1. Its full label, shortcut, description, and
    directory should be available, followed by the menu help. Esc returns.
-5. Repeat Home at 46 columns and in a short terminal. Every shortcut suffix,
-   including Shift+Page Up/Down, should remain readable. Scroll to the last
-   action; group headings must never become selectable actions. Turn the
-   profile off or reserve one chord and check that Home retains its key with
-   a visible inactive/reserved status.
+5. Resize Home between a wide terminal and 46 × 16. All 26 direct shortcuts,
+   including full Super+Alt+Shift+PageUp/PageDown chords, must remain reachable.
+   Scroll to the final menu-close action and check that selection survives
+   resizing, help, and Settings navigation. Disable the profile or reserve a
+   chord and check that Home retains its chord with a visible inactive status.
 
 ### Optional learning
 
@@ -175,18 +176,38 @@ create, move, or close terminals.
 
 ### 4. Settings, preview, save, and undo
 
-1. Press Ctrl+O. Open “Gaps between panes”: choose On/Off using the arrows.
-2. Enter opens a summary and diff. Esc returns to the choice dialog without
-   saving. Esc again returns to Settings with the same row selected.
+1. Press Ctrl+O. Cycle Layout, Appearance, Behavior, Notifications, and Controls
+   with Tab/Shift+Tab or Left/Right. Search `theme` from Layout: Appearance's
+   theme must appear. Cycle a category while searching, then clear the query;
+   the original category, selected value, and scroll should return.
+2. In Layout, open “Gaps between panes”: choose On/Off using the arrows.
+   Enter opens a summary and diff. Esc returns to the choice dialog without
+   saving; Esc again returns to the same Settings row.
 3. Choose the opposite of your current value, review, and apply. Check the
-   completion message and that your selection/query remain intact.
+   completion message and that category, selection, and query remain intact.
 4. Press Ctrl+Z, review the undo, and apply. The previous value should return.
-5. Open Tab bar position and Notification delivery. Check labeled options
-   and the inherited-default option.
-6. Open Sidebar width, enter `abc`, and review. The error should explain the
+5. Check labeled options and inherited defaults for Tab bar position in Layout
+   and Notification delivery in Notifications.
+6. In Layout, open Sidebar width and enter `abc`. The error should explain the
    invalid entry; dismissing it should return to `abc` for correction.
-7. Open Theme or a native binding and press Ctrl+D. Inspect the proposed
-   removal of the override, then Esc back and cancel if you want to keep it.
+7. In Appearance, open Theme and press Ctrl+D. Inspect the proposed removal of
+   the override, then Esc back and cancel if you want to keep it.
+8. In Behavior, select Confirm pane close. Enter toggles On/Off and saves
+   immediately, without a config preview. Close and reopen Settings: the value
+   must persist. Leave it On before testing the default close policy below.
+9. In Controls, open Keybindings and return with Esc. The Controls category and
+   selected row must be restored. Repeat at 46 × 16; headings and rows must fit.
+10. On a spacing-enabled native build, the four spacing values must be plain
+    numbers, inheriting gaps `2`/`1` and padding `1`/`1` when unset (vertical
+    padding keeps one visible row rather than rounding half a row down to zero).
+    In a split layout, set both gaps and both padding values to `0`:
+    there must be no blank gap/margin and only one divider when borders are on.
+    Try `1`, then distinct values such as gaps `3`/`5` and padding `2`/`1`; count
+    blank cells and check that each control changes only its own axis/edges.
+    Set one gap back to `0` while leaving the other positive. Check shared
+    divider joins, focus colors, and mouse focus with borders on and off.
+    Zoom a pane and check padding remains; Gaps Off must remove all spacing
+    without losing the saved values. Reset an override and review undo.
 
 ### 5. Pickers and commands
 
@@ -199,17 +220,21 @@ create, move, or close terminals.
    popup tools.
 4. Check split, focus, swap, resize, zoom, and workspace movement from their
    sections. The menu should keep targeting its originating pane.
-5. In an idle shell, Close pane should close directly. Repeat with a harmless
-   foreground task such as `sleep 300`: a confirmation must appear. Cancel
-   keeps the pane and its work running; an explicit Close applies afterward.
+5. With Confirm pane close On, an idle shell should close directly. Repeat with
+   a harmless foreground task such as `sleep 300`: a confirmation must appear.
+   Cancel keeps the pane and its work running; an explicit Close applies afterward.
 6. Super+Alt+X uses the same policy. Repeat tab/workspace close with one busy
    pane among idle shells: the whole scope must wait for confirmation.
 7. If the foreground process state cannot be verified, require confirmation.
    Reaching a pane edge with Ctrl+Alt+arrows must leave the tab/workspace intact.
+8. Turn Confirm pane close Off. Both the menu action and Super+Alt+X must close a
+   disposable pane running `sleep 300` immediately, with no prompt. Tab/workspace
+   closes must still confirm running work. Turn it back On and verify pane prompts
+   return. Practice close drills must still refuse targets that start work.
 
 ### 6. Integration state
 
-1. Toggle Omarchy controls Off from Configure. The status and completion
+1. Toggle Omarchy controls Off from Settings → Controls. The status and completion
    message should change; shortcut hints must describe their active state.
    The profile should explain that focused Super+Alt commands are disabled.
 2. Toggle On again **before closing this menu**. When disabled,
@@ -249,12 +274,12 @@ Start from a normal Herdr terminal pane in a recognizable directory.
 | Super+Alt+Shift+U / D / L / R | Swap the focused pane with the neighbor in that direction. |
 | Super+Alt+J | Rotate the nearest two-leaf split, preserving the remaining layout and focused pane. |
 | Super+Alt+Z | Zoom the focused pane, then restore it on a second press. |
-| Super+Alt+X | Close an idle shell directly; confirm running or unknown work. |
+| Super+Alt+X | Close an idle shell directly; confirm running or unknown work unless Confirm pane close is Off. |
 | Super+Alt+T / W | Create / close a tab in the current workspace. |
 | Super+Alt+Shift+T / W | Create / close a Herdr workspace. |
-| Super+Alt+Page Up / Page Down | Previous / next tab, without depending on pane geometry. |
+| Super+Alt+Page Up / Page Down | Previous / next tab, continuing into the previous / next workspace at a tab boundary and restoring its selected pane. |
 | Super+Alt+Shift+Page Up / Page Down | Previous / next Herdr workspace. |
-| Super+Alt+P / Shift+P | Next / previous pane in the current tab, wrapping at the ends. |
+| Super+Alt+P / Shift+P | Next / previous pane, continuing through tabs and workspaces and wrapping around the session. |
 | Super+Alt+A | New Omarchy agent pane to the right in the originating tab/directory. |
 | Super+Alt+V | Lazygit opens in a regular pane to the right in the originating directory. |
 | Super+Alt+Q / Shift+Q | Next / previous agent in a stable blocked → done → working → idle sweep. |
@@ -279,6 +304,38 @@ Then verify:
 6. If an action fails or the target client becomes ambiguous, keep the outer
    desktop window intact and report the error. A close action must never fall
    back to closing the whole terminal window.
+7. In disposable workspaces, create two panes in one tab, a second tab, and
+   another workspace. P from the first tab's last pane must enter the second
+   tab's first pane; P from the workspace's last pane must enter the next
+   workspace. Shift+P must reverse both boundaries, entering the preceding
+   tab's last pane. Repeat at the session ends to verify wrapping.
+8. PageDown from a workspace's last tab must enter the next workspace's first
+   tab, restoring that tab's selected pane. PageUp reverses that boundary.
+   Directional Ctrl+Alt+arrows must still stay local, and practice navigation
+   must remain inside its prepared fixtures.
+
+### 9. Tab and workspace naming
+
+1. Start an omp agent in a new tab and give it a task. Within a few seconds of
+   its session title appearing, the tab should show that title, shortened to fit;
+   spinner changes must not rename it again.
+2. Give the agent a different task. The tab should follow once the new title has
+   held for two seconds, at most once every ten seconds. Exit the agent: the last
+   name stays.
+3. Rename the tab manually; it should keep your name as tasks change. Run **Name
+   tab from agent task** from the menu's Tabs section: the tab should show its
+   position, then the current task.
+4. Start a herdr-board card run or create a tab with its own name from Heeler.
+   Those names must stay.
+5. Create two workspaces from the same Git project. The second should get the
+   branch name before a numeric suffix; neither changes later. New split panes
+   stay unlabeled.
+6. In **Settings → Behavior → Names**, choose **Herdr default** tab names. Tabs
+   the namer owns return to their positions; manual names stay. Restore **Agent
+   task**.
+
+If a name looks wrong, record the agent's terminal title, its `quota_topic`
+token, the tab label, and `~/.local/state/herdr-shell/namer/*.log`.
 
 If something looks wrong, report the page, terminal dimensions, selected row,
 and key sequence; these identify the layout or state transition to inspect.

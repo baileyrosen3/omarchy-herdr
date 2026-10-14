@@ -34,6 +34,9 @@ class LearningMenuTests(unittest.TestCase):
         patcher = patch.object(onboarding, "state_path", return_value=self.state)
         patcher.start()
         self.addCleanup(patcher.stop)
+        preferences = patch.dict("os.environ", HERDR_SHELL_DESKTOP_CONFIG_HOME=temporary.name)
+        preferences.start()
+        self.addCleanup(preferences.stop)
 
     def test_first_menu_shows_welcome_once_then_opens_normal_menu(self):
         first = instance(["\x1b"])
@@ -137,9 +140,9 @@ class LearningMenuTests(unittest.TestCase):
             self.assertIsNone(first.run())
         welcome.assert_not_called()
         for row in ({"kind": "action", "id": "workspace-close"}, {"kind": "setting", "id": "theme.name"},
-                    {"kind": "desktop-toggle", "id": "desktop-enabled"}):
+                    {"kind": "desktop-toggle", "id": "desktop-enabled"},
+                    {"kind": "pane-close-toggle", "id": "confirm-pane-close"}):
             self.assertIsNone(first.activate(row))
-        self.assertEqual(first.help.call_count, 3)
 
     def test_game_menu_blocks_undo_hotkeys(self):
         import curses

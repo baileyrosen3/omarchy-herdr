@@ -209,5 +209,7 @@ def remove(args, store):
         if failures:
             raise ShellError(str(exc) + "; removal rollback incomplete: " + "; ".join(failures)) from exc
         raise
+    from . import namer
+    namer.stop()
     return {"removed": PLUGIN_ID, "desktop": desktop_removed, "plugin": unlink_attempted,
             "helper": helper_removed, **result}

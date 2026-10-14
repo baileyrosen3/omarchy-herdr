@@ -1,0 +1,1488 @@
+diff --git i/docs/next/website/src/content/docs/configuration.mdx w/docs/next/website/src/content/docs/configuration.mdx
+index 9188dbb..03bc100 100644
+--- i/docs/next/website/src/content/docs/configuration.mdx
++++ w/docs/next/website/src/content/docs/configuration.mdx
+@@ -313,6 +313,12 @@ The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](
+ 
+ `ui.pane_borders` accepts `"auto"` (the default, borders only for split panes), `"always"` (also frame a single pane), or `"off"`. A single-pane frame requires `ui.pane_outer_borders = true`, because all its edges are outer edges. Existing boolean values remain valid: `true` means `"auto"` and `false` means `"off"`.
+ 
++`ui.pane_gaps` keeps split panes visually separated with blank gaps instead of shared divider borders. While it is enabled, `ui.pane_gap_horizontal` and `ui.pane_gap_vertical` size the blank gap between side-by-side and stacked pane borders, and `ui.tab_padding_horizontal` and `ui.tab_padding_vertical` size the blank margin at the left/right and top/bottom edges of the tab pane area. All four are whole terminal cells from `0` to `65535`. Setting `ui.pane_gaps = false` removes the numeric gaps and margins and returns to compact shared borders, keeping the sizes for later.
++
++Gap `0` leaves no blank space and uses one shared divider on that axis when borders are enabled. A positive gap `N` leaves exactly `N` blank cells between pane borders. Padding `0` adds no edge margin; padding `N` adds `N` blank cells at each matching tab edge. The four sizes are independent; padding is not automatically scaled from gaps. Oversized values clamp inside the available pane area.
++
++Defaults are 2 columns / 1 row for gaps and 1 column / 1 row for tab-edge padding. Horizontal padding is half the gap; vertical padding keeps a visible row rather than rounding half a row down to zero.
++
+ Set `tab_bar_position = "bottom"` under `[ui]` to place the desktop tab row below the terminal panes. Prefix, Navigate, Copy, and Resize mode bars temporarily replace the bottom tab row while active. The default is `"top"`.
+ 
+ Configure an ordered tmux-style status area at the right edge of the tab row:
+diff --git i/docs/next/website/src/data/config-reference.json w/docs/next/website/src/data/config-reference.json
+index eb7e08d..3562e6d 100644
+--- i/docs/next/website/src/data/config-reference.json
++++ w/docs/next/website/src/data/config-reference.json
+@@ -985,7 +985,31 @@
+           "key": "ui.pane_gaps",
+           "type": "boolean",
+           "default": "true",
+-          "description": "Keep split panes visually separated instead of sharing divider borders."
++          "description": "Keep split panes visually separated with the numeric pane gap and tab-edge padding sizes instead of sharing divider borders. Disabling removes both and returns to compact shared borders while keeping the sizes for later."
++        },
++        {
++          "key": "ui.pane_gap_horizontal",
++          "type": "integer",
++          "default": "2",
++          "description": "Terminal columns of blank gap between side-by-side pane borders while ui.pane_gaps is enabled. Whole numbers 0 to 65535. The default matches the 1-row vertical default for typical 2:1 terminal cells."
++        },
++        {
++          "key": "ui.pane_gap_vertical",
++          "type": "integer",
++          "default": "1",
++          "description": "Terminal rows of blank gap between stacked pane borders while ui.pane_gaps is enabled. Whole numbers 0 to 65535."
++        },
++        {
++          "key": "ui.tab_padding_horizontal",
++          "type": "integer",
++          "default": "1",
++          "description": "Terminal columns of blank margin at the left and right edges of the tab pane area while ui.pane_gaps is enabled. Whole numbers 0 to 65535. The default is half the horizontal pane gap."
++        },
++        {
++          "key": "ui.tab_padding_vertical",
++          "type": "integer",
++          "default": "1",
++          "description": "Terminal rows of blank margin at the top and bottom edges of the tab pane area while ui.pane_gaps is enabled. Whole numbers 0 to 65535. The default keeps a visible one-row margin rather than rounding half the vertical pane gap down to zero."
+         },
+         {
+           "key": "ui.show_agent_labels_on_pane_borders",
+diff --git i/src/app/agent_resume.rs w/src/app/agent_resume.rs
+index f088138..d21783d 100644
+--- i/src/app/agent_resume.rs
++++ w/src/app/agent_resume.rs
+@@ -151,6 +151,7 @@ impl App {
+             terminal_area,
+             self.state.pane_borders,
+             self.state.pane_gaps,
++            self.state.pane_spacing,
+             self.state.pane_outer_borders,
+         );
+ 
+@@ -323,12 +324,14 @@ fn derived_pending_agent_resume_pane_infos(
+     terminal_area: Rect,
+     pane_borders: crate::config::PaneBordersConfig,
+     pane_gaps: bool,
++    pane_spacing: crate::config::PaneSpacing,
+     pane_outer_borders: bool,
+ ) -> Vec<crate::layout::PaneInfo> {
+     crate::ui::apply_pane_chrome(
+         tab.layout.panes(terminal_area),
+         pane_borders,
+         pane_gaps,
++        pane_spacing,
+         pane_outer_borders,
+     )
+     .into_iter()
+diff --git i/src/app/api/panes.rs w/src/app/api/panes.rs
+index e4e03e7..fe06720 100644
+--- i/src/app/api/panes.rs
++++ w/src/app/api/panes.rs
+@@ -2118,6 +2118,7 @@ impl App {
+             tab.layout.panes(area),
+             self.state.pane_borders,
+             self.state.pane_gaps,
++            self.state.pane_spacing,
+             self.state.pane_outer_borders,
+         )
+         .into_iter()
+diff --git i/src/app/mod.rs w/src/app/mod.rs
+index 8fad961..9df9e12 100644
+--- i/src/app/mod.rs
++++ w/src/app/mod.rs
+@@ -491,6 +491,7 @@ impl App {
+             pane_outer_borders: config.ui.pane_outer_borders,
+             pane_scrollbars: config.ui.pane_scrollbars,
+             pane_gaps: config.ui.pane_gaps,
++            pane_spacing: config.ui.pane_spacing(),
+             show_agent_labels_on_pane_borders: config.ui.show_agent_labels_on_pane_borders,
+             tab_bar_right: Vec::new(),
+             tab_bar_right_separator: String::new(),
+@@ -840,6 +841,7 @@ impl App {
+                 self.state.pane_outer_borders = config.ui.pane_outer_borders;
+                 self.state.pane_scrollbars = config.ui.pane_scrollbars;
+                 self.state.pane_gaps = config.ui.pane_gaps;
++                self.state.pane_spacing = config.ui.pane_spacing();
+                 self.state.show_agent_labels_on_pane_borders =
+                     config.ui.show_agent_labels_on_pane_borders;
+                 self.configure_tab_bar_status(
+diff --git i/src/app/state.rs w/src/app/state.rs
+index 65c06a6..3695220 100644
+--- i/src/app/state.rs
++++ w/src/app/state.rs
+@@ -834,6 +834,8 @@ pub struct AppState {
+     pub pane_outer_borders: bool,
+     pub pane_scrollbars: bool,
+     pub pane_gaps: bool,
++    /// Numeric gap and tab-edge padding sizes applied while `pane_gaps` is enabled.
++    pub pane_spacing: crate::config::PaneSpacing,
+     pub show_agent_labels_on_pane_borders: bool,
+     pub tab_bar_right: Vec<TabBarStatusSegment>,
+     pub tab_bar_right_separator: String,
+@@ -1060,6 +1062,7 @@ impl AppState {
+             pane_outer_borders: true,
+             pane_scrollbars: true,
+             pane_gaps: false,
++            pane_spacing: crate::config::PaneSpacing::default(),
+             show_agent_labels_on_pane_borders: false,
+             tab_bar_right: Vec::new(),
+             tab_bar_right_separator: " ".into(),
+diff --git i/src/cli/spec.rs w/src/cli/spec.rs
+index 1cfc2e7..cf54110 100644
+--- i/src/cli/spec.rs
++++ w/src/cli/spec.rs
+@@ -21,6 +21,7 @@ pub(super) fn command() -> Command {
+         )
+         .arg(flag("handoff").help("Opt into live handoff for update or remote attach"))
+         .arg(flag("default-config").help("Print default configuration and exit"))
++        .arg(flag("client-capabilities").help("Print client capability versions as JSON and exit"))
+         .arg(flag("skill").help("Print the agent skill file and exit"))
+         .arg(
+             Arg::new("version")
+diff --git i/src/config.rs w/src/config.rs
+index 8550097..fd3091f 100644
+--- i/src/config.rs
++++ w/src/config.rs
+@@ -24,9 +24,9 @@ pub use self::{
+     model::{
+         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
+         ConfigReloadStatus, HostCursorModeConfig, NewTerminalCwdConfig, PaneBordersConfig,
+-        ShellModeConfig, SidebarCollapsedModeConfig, StatusIndicatorStyle, TabBarPositionConfig,
+-        ToastClipboardPosition, ToastConfig, ToastDelivery, ToastHerdrPosition,
+-        UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
++        PaneSpacing, ShellModeConfig, SidebarCollapsedModeConfig, StatusIndicatorStyle,
++        TabBarPositionConfig, ToastClipboardPosition, ToastConfig, ToastDelivery,
++        ToastHerdrPosition, UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
+     },
+     sidebar::{
+         AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SidebarTokenStyle,
+diff --git i/src/config/model.rs w/src/config/model.rs
+index 0e2e57c..4d6207e 100644
+--- i/src/config/model.rs
++++ w/src/config/model.rs
+@@ -934,6 +934,53 @@ impl<'de> Deserialize<'de> for PaneBordersConfig {
+     }
+ }
+ 
++/// Resolved copyable pane spacing geometry, derived from [`UiConfig`] so layout,
++/// render, hit-test, and background sizing paths never re-read configuration.
++///
++/// The values only take effect while `ui.pane_gaps` is enabled; disabled keeps
++/// the compact shared-border geometry and ignores these sizes.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct PaneSpacing {
++    /// Blank terminal columns between side-by-side pane areas.
++    pub gap_horizontal: u16,
++    /// Blank terminal rows between stacked pane areas.
++    pub gap_vertical: u16,
++    /// Blank terminal columns at the left and right edges of the tab pane area.
++    pub padding_horizontal: u16,
++    /// Blank terminal rows at the top and bottom edges of the tab pane area.
++    pub padding_vertical: u16,
++}
++
++impl Default for PaneSpacing {
++    fn default() -> Self {
++        Self {
++            gap_horizontal: 2,
++            gap_vertical: 1,
++            padding_horizontal: 1,
++            padding_vertical: 1,
++        }
++    }
++}
++
++#[cfg(test)]
++mod pane_spacing_default_tests {
++    use super::{Config, PaneSpacing};
++
++    #[test]
++    fn pane_spacing_defaults_preserve_compact_split_room() {
++        let expected = PaneSpacing {
++            gap_horizontal: 2,
++            gap_vertical: 1,
++            padding_horizontal: 1,
++            padding_vertical: 1,
++        };
++        assert_eq!(PaneSpacing::default(), expected);
++        assert_eq!(Config::default().ui.pane_spacing(), expected);
++        let inherited: Config = toml::from_str("[ui]").unwrap();
++        assert_eq!(inherited.ui.pane_spacing(), expected);
++    }
++}
++
+ #[derive(Debug, Deserialize)]
+ #[serde(default)]
+ pub struct UiConfig {
+@@ -976,8 +1023,23 @@ pub struct UiConfig {
+     pub pane_outer_borders: bool,
+     /// Draw interactive scrollbars beside terminal panes. Default: true.
+     pub pane_scrollbars: bool,
+-    /// Keep split panes visually separated instead of sharing divider borders. Default: true.
++    /// Keep split panes visually separated with numeric gaps and tab-edge
++    /// padding instead of sharing divider borders. When disabled, panes return
++    /// to compact shared borders and the numeric sizes are kept for later.
++    /// Default: true.
+     pub pane_gaps: bool,
++    /// Terminal columns of blank gap between side-by-side pane borders while
++    /// `pane_gaps` is enabled. Default: 2.
++    pub pane_gap_horizontal: u16,
++    /// Terminal rows of blank gap between stacked pane borders while
++    /// `pane_gaps` is enabled. Default: 1.
++    pub pane_gap_vertical: u16,
++    /// Terminal columns of blank margin at the left and right edges of the tab
++    /// pane area while `pane_gaps` is enabled. Default: 1.
++    pub tab_padding_horizontal: u16,
++    /// Terminal rows of blank margin at the top and bottom edges of the tab
++    /// pane area while `pane_gaps` is enabled. Default: 1.
++    pub tab_padding_vertical: u16,
+     /// Show agent labels in split pane borders when no manual pane label is set. Default: false.
+     pub show_agent_labels_on_pane_borders: bool,
+     /// Hide the tab row when the workspace has one tab. Default: false.
+@@ -1194,6 +1256,7 @@ impl Default for WorktreesConfig {
+ 
+ impl Default for UiConfig {
+     fn default() -> Self {
++        let spacing = PaneSpacing::default();
+         Self {
+             sidebar_width: 26,
+             sidebar_min_width: 18,
+@@ -1214,6 +1277,10 @@ impl Default for UiConfig {
+             pane_outer_borders: true,
+             pane_scrollbars: true,
+             pane_gaps: true,
++            pane_gap_horizontal: spacing.gap_horizontal,
++            pane_gap_vertical: spacing.gap_vertical,
++            tab_padding_horizontal: spacing.padding_horizontal,
++            tab_padding_vertical: spacing.padding_vertical,
+             show_agent_labels_on_pane_borders: false,
+             hide_tab_bar_when_single_tab: false,
+             tab_bar_position: TabBarPositionConfig::Top,
+@@ -1232,6 +1299,16 @@ impl Default for UiConfig {
+ }
+ 
+ impl UiConfig {
++    /// Resolve the copyable pane spacing scalars used by geometry paths.
++    pub fn pane_spacing(&self) -> PaneSpacing {
++        PaneSpacing {
++            gap_horizontal: self.pane_gap_horizontal,
++            gap_vertical: self.pane_gap_vertical,
++            padding_horizontal: self.tab_padding_horizontal,
++            padding_vertical: self.tab_padding_vertical,
++        }
++    }
++
+     pub fn mouse_scroll_lines(&self) -> usize {
+         self.mouse_scroll_lines
+             .map(NonZeroUsize::get)
+@@ -1562,6 +1639,31 @@ tab_bar_right_separator = " · "
+         assert_eq!(config.ui.tab_bar_right_separator, " · ");
+     }
+ 
++    #[test]
++    fn pane_spacing_values_parse_independently_and_reject_out_of_range() {
++        let config: Config = toml::from_str(
++            r#"
++[ui]
++pane_gaps = true
++pane_gap_horizontal = 0
++pane_gap_vertical = 65535
++tab_padding_horizontal = 7
++tab_padding_vertical = 3
++"#,
++        )
++        .unwrap();
++        assert!(config.ui.pane_gaps);
++        let spacing = config.ui.pane_spacing();
++        assert_eq!(spacing.gap_horizontal, 0);
++        assert_eq!(spacing.gap_vertical, 65535);
++        assert_eq!(spacing.padding_horizontal, 7);
++        assert_eq!(spacing.padding_vertical, 3);
++
++        assert!(toml::from_str::<Config>("[ui]\npane_gap_horizontal = -1").is_err());
++        assert!(toml::from_str::<Config>("[ui]\npane_gap_horizontal = 65536").is_err());
++        assert!(toml::from_str::<Config>("[ui]\ntab_padding_vertical = 1.5").is_err());
++    }
++
+     #[test]
+     fn worktrees_directory_defaults_and_parses() {
+         let default_config = Config::default();
+diff --git i/src/main.rs w/src/main.rs
+index 45a6409..e2ed8fd 100644
+--- i/src/main.rs
++++ w/src/main.rs
+@@ -300,9 +300,25 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
+ # Set false to reclaim the scrollbar column and keep it out of terminal-native selections.
+ # pane_scrollbars = true
+ 
+-# Keep split panes visually separated instead of sharing divider borders.
++# Keep split panes visually separated with numeric gaps and tab-edge padding
++# instead of sharing divider borders. Disable for compact shared borders; the
++# numeric sizes below are kept for when gaps are re-enabled.
+ # pane_gaps = true
+ 
++# Blank terminal columns between side-by-side pane borders while pane_gaps is true.
++# pane_gap_horizontal = 2
++
++# Blank terminal rows between stacked pane borders while pane_gaps is true.
++# pane_gap_vertical = 1
++
++# Blank terminal columns at the left and right edges of the tab pane area while
++# pane_gaps is true. Defaults to half the horizontal pane gap.
++# tab_padding_horizontal = 1
++
++# Blank terminal rows at the top and bottom edges of the tab pane area while
++# pane_gaps is true. Keeps a visible one-row margin rather than halving to zero.
++# tab_padding_vertical = 1
++
+ # Show detected/reported agent labels in split pane borders when no manual pane name is set.
+ # show_agent_labels_on_pane_borders = false
+ 
+@@ -537,7 +553,13 @@ fn main() -> io::Result<()> {
+         && !args.iter().any(|a| {
+             matches!(
+                 a.as_str(),
+-                "--help" | "-h" | "--version" | "-V" | "--default-config" | "--skill"
++                "--help"
++                    | "-h"
++                    | "--version"
++                    | "-V"
++                    | "--default-config"
++                    | "--client-capabilities"
++                    | "--skill"
+             )
+         })
+     {
+@@ -700,6 +722,7 @@ fn main() -> io::Result<()> {
+         println!("                      Keybindings for --remote app attach (default: local)");
+         println!("  --handoff           Opt into live handoff for update or remote attach");
+         println!("  --default-config    Print default configuration and exit");
++        println!("  --client-capabilities  Print client capability versions as JSON and exit");
+         println!("  --skill             Print the agent skill file and exit");
+         println!("  --version, -V       Print version and exit");
+         println!("  --help, -h          Show this help");
+@@ -725,6 +748,15 @@ fn main() -> io::Result<()> {
+         return Ok(());
+     }
+ 
++    // Read-only advertisement for local client integrations. Stock Herdr
++    // rejects this flag, so only an explicit integer version opts a feature
++    // family in. Footer support is a separate capability and stays unpublished.
++    if args.iter().any(|a| a == "--client-capabilities") {
++        platform::begin_cli_output();
++        println!("{}", serde_json::json!({ "pane_spacing": 1 }));
++        return Ok(());
++    }
++
+     if args.iter().any(|a| a == "--skill") {
+         platform::begin_cli_output();
+         print!("{SKILL}");
+@@ -740,6 +772,7 @@ fn main() -> io::Result<()> {
+         "--version",
+         "-V",
+         "--default-config",
++        "--client-capabilities",
+         "--skill",
+         "--help",
+         "-h",
+diff --git i/src/server/client_shell.rs w/src/server/client_shell.rs
+index d79c89c..4feab87 100644
+--- i/src/server/client_shell.rs
++++ w/src/server/client_shell.rs
+@@ -417,6 +417,7 @@ pub(super) fn render_pane_surface(
+                 split,
+                 app.state.pane_borders.draws_borders(),
+                 app.state.pane_gaps,
++                app.state.pane_spacing,
+                 &pane_frames,
+             )?;
+             let direction = match split.direction {
+@@ -574,43 +575,38 @@ fn split_hit_rect(
+     split: &crate::layout::SplitBorder,
+     pane_borders: bool,
+     pane_gaps: bool,
++    pane_spacing: crate::config::PaneSpacing,
+     pane_frames: &[Rect],
+ ) -> Option<Rect> {
+-    let hit = match (split.direction, pane_borders, pane_gaps) {
+-        (ratatui::layout::Direction::Horizontal, true, false) => {
+-            Rect::new(split.pos, split.area.y, 1, split.area.height)
++    let horizontal = matches!(split.direction, ratatui::layout::Direction::Horizontal);
++    let gap = if !pane_gaps {
++        0
++    } else if horizontal {
++        pane_spacing.gap_horizontal
++    } else {
++        pane_spacing.gap_vertical
++    };
++    // Positive gaps own exactly their blank cells. A zero gap has only the
++    // shared divider, and must not steal input from a borderless terminal.
++    let (start, span) = if gap == 0 {
++        if !pane_borders {
++            return None;
+         }
+-        (ratatui::layout::Direction::Horizontal, true, true) => {
+-            let start = split.pos.saturating_sub(1);
+-            Rect::new(
+-                start,
+-                split.area.y,
+-                split.pos.saturating_sub(start).saturating_add(1),
+-                split.area.height,
+-            )
+-        }
+-        (ratatui::layout::Direction::Horizontal, false, true) => Rect::new(
+-            split.pos.checked_sub(1)?,
+-            split.area.y,
+-            1,
+-            split.area.height,
+-        ),
+-        (ratatui::layout::Direction::Vertical, true, false) => {
+-            Rect::new(split.area.x, split.pos, split.area.width, 1)
+-        }
+-        (ratatui::layout::Direction::Vertical, true, true) => {
+-            let start = split.pos.saturating_sub(1);
+-            Rect::new(
+-                split.area.x,
+-                start,
+-                split.area.width,
+-                split.pos.saturating_sub(start).saturating_add(1),
+-            )
+-        }
+-        (ratatui::layout::Direction::Vertical, false, true) => {
+-            Rect::new(split.area.x, split.pos.checked_sub(1)?, split.area.width, 1)
+-        }
+-        (_, false, false) => return None,
++        (split.pos, 1)
++    } else if horizontal {
++        let start = split.pos.saturating_sub(gap).max(split.area.x);
++        (start, split.pos.saturating_sub(start))
++    } else {
++        let start = split.pos.saturating_sub(gap).max(split.area.y);
++        (start, split.pos.saturating_sub(start))
++    };
++    if span == 0 {
++        return None;
++    }
++    let hit = if horizontal {
++        Rect::new(start, split.area.y, span, split.area.height)
++    } else {
++        Rect::new(split.area.x, start, split.area.width, span)
+     };
+     if !pane_borders
+         && pane_frames.iter().any(|pane| {
+@@ -693,7 +689,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn split_hits_follow_released_border_and_gap_geometry() {
++    fn split_hits_follow_numeric_gap_geometry() {
+         let horizontal = crate::layout::SplitBorder {
+             pos: 20,
+             direction: ratatui::layout::Direction::Horizontal,
+@@ -701,19 +697,59 @@ mod tests {
+             area: Rect::new(2, 3, 40, 12),
+             path: vec![false],
+         };
++        let spacing = crate::config::PaneSpacing {
++            gap_horizontal: 4,
++            gap_vertical: 2,
++            padding_horizontal: 2,
++            padding_vertical: 1,
++        };
++
++        // Compact shared borders keep the divider column itself draggable.
++        let compact = split_hit_rect(&horizontal, true, false, spacing, &[]);
++        assert_eq!(compact, Some(Rect::new(20, 3, 1, 12)));
+         assert_eq!(
+-            split_hit_rect(&horizontal, true, false, &[]),
+-            Some(Rect::new(20, 3, 1, 12))
++            split_hit_rect(&horizontal, false, false, spacing, &[]),
++            None
+         );
+-        assert_eq!(
+-            split_hit_rect(&horizontal, true, true, &[]),
+-            Some(Rect::new(19, 3, 2, 12))
+-        );
+-        assert_eq!(
+-            split_hit_rect(&horizontal, false, true, &[]),
+-            Some(Rect::new(19, 3, 1, 12))
+-        );
+-        assert_eq!(split_hit_rect(&horizontal, false, false, &[]), None);
++
++        // Numeric gaps make the blank gap between the borders the handle.
++        let bordered = split_hit_rect(&horizontal, true, true, spacing, &[]);
++        assert_eq!(bordered, Some(Rect::new(16, 3, 4, 12)));
++        let borderless = split_hit_rect(&horizontal, false, true, spacing, &[]);
++        assert_eq!(borderless, Some(Rect::new(16, 3, 4, 12)));
++
++        // Zero-sized gaps keep the shared border columns draggable.
++        let flush = crate::config::PaneSpacing {
++            gap_horizontal: 0,
++            gap_vertical: 0,
++            ..spacing
++        };
++        let flush_hit = split_hit_rect(&horizontal, true, true, flush, &[]);
++        assert_eq!(flush_hit, Some(Rect::new(20, 3, 1, 12)));
++        assert_eq!(split_hit_rect(&horizontal, false, true, flush, &[]), None);
++
++        // A gap wider than the leading pane clamps inside the split area.
++        let crossing = crate::layout::SplitBorder {
++            pos: 3,
++            direction: ratatui::layout::Direction::Horizontal,
++            ratio: 0.1,
++            area: Rect::new(2, 3, 40, 12),
++            path: vec![false],
++        };
++        let crossed = split_hit_rect(&crossing, true, true, spacing, &[]);
++        assert_eq!(crossed, Some(Rect::new(2, 3, 1, 12)));
++
++        // A degenerate split at the area edge has no blank gap to grab.
++        let edge = crate::layout::SplitBorder {
++            pos: 0,
++            direction: ratatui::layout::Direction::Horizontal,
++            ratio: 0.5,
++            area: Rect::new(0, 0, 1, 4),
++            path: Vec::new(),
++        };
++        assert_eq!(split_hit_rect(&edge, true, true, spacing, &[]), None);
++        let edge_flush = split_hit_rect(&edge, true, true, flush, &[]);
++        assert_eq!(edge_flush, Some(Rect::new(0, 0, 1, 4)));
+ 
+         let vertical = crate::layout::SplitBorder {
+             pos: 9,
+@@ -722,26 +758,11 @@ mod tests {
+             area: Rect::new(2, 3, 40, 12),
+             path: vec![true],
+         };
++        let vertical_hit = split_hit_rect(&vertical, true, true, spacing, &[]);
++        assert_eq!(vertical_hit, Some(Rect::new(2, 7, 40, 2)));
+         assert_eq!(
+-            split_hit_rect(&vertical, true, true, &[]),
+-            Some(Rect::new(2, 8, 40, 2))
+-        );
+-
+-        let edge = crate::layout::SplitBorder {
+-            pos: 0,
+-            direction: ratatui::layout::Direction::Horizontal,
+-            ratio: 0.5,
+-            area: Rect::new(0, 0, 1, 4),
+-            path: Vec::new(),
+-        };
+-        assert_eq!(
+-            split_hit_rect(&edge, true, true, &[]),
+-            Some(Rect::new(0, 0, 1, 4))
+-        );
+-        assert_eq!(split_hit_rect(&edge, false, true, &[]), None);
+-        assert_eq!(
+-            split_hit_rect(&horizontal, false, true, &[Rect::new(19, 3, 1, 12)]),
+-            None
++            split_hit_rect(&vertical, true, true, flush, &[]),
++            Some(Rect::new(2, 9, 40, 1))
+         );
+     }
+ }
+diff --git i/src/server/headless/tests/mod.rs w/src/server/headless/tests/mod.rs
+index 27f3bff..0fd91d2 100644
+--- i/src/server/headless/tests/mod.rs
++++ w/src/server/headless/tests/mod.rs
+@@ -69,6 +69,10 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
+         api_rx,
+         event_hub,
+     );
++    // Compact pane geometry keeps viewport sizes and forwarded mouse
++    // coordinates stable across headless tests; pane spacing has dedicated
++    // layout tests and real UI coverage.
++    app.state.pane_gaps = false;
+ 
+     app.state.default_shell = crate::app::exiting_test_command().into();
+     let dir = std::env::temp_dir().join(format!(
+diff --git i/src/ui/panes.rs w/src/ui/panes.rs
+index adf1f3d..ad0f494 100644
+--- i/src/ui/panes.rs
++++ w/src/ui/panes.rs
+@@ -54,108 +54,130 @@ pub(crate) fn pane_inner_rect(area: Rect, borders: Borders) -> Rect {
+     }
+ }
+ 
+-fn ranges_overlap(a_start: u16, a_len: u16, b_start: u16, b_len: u16) -> bool {
+-    a_start < b_start.saturating_add(b_len) && b_start < a_start.saturating_add(a_len)
+-}
+-
+-fn pane_to_right<'a>(info: &PaneInfo, panes: &'a [PaneInfo]) -> Option<&'a PaneInfo> {
+-    let right = info.rect.x.saturating_add(info.rect.width);
+-    panes.iter().find(|other| {
+-        other.id != info.id
+-            && other.rect.x == right
+-            && ranges_overlap(
+-                info.rect.y,
+-                info.rect.height,
+-                other.rect.y,
+-                other.rect.height,
+-            )
+-    })
+-}
+-
+-fn pane_below<'a>(info: &PaneInfo, panes: &'a [PaneInfo]) -> Option<&'a PaneInfo> {
+-    let bottom = info.rect.y.saturating_add(info.rect.height);
+-    panes.iter().find(|other| {
+-        other.id != info.id
+-            && other.rect.y == bottom
+-            && ranges_overlap(info.rect.x, info.rect.width, other.rect.x, other.rect.width)
+-    })
+-}
+-
+-fn shrink_for_one_cell_gap(size: u16) -> u16 {
+-    if size > 1 {
+-        size - 1
+-    } else {
+-        size
++/// Resolve the tab pane area for a pane that fills the whole tab surface,
++/// mirroring `apply_pane_chrome`'s per-edge padding clamp so zoomed and
++/// single-pane tabs keep identical geometry.
++fn tab_pane_area(area: Rect, pane_gaps: bool, pane_spacing: crate::config::PaneSpacing) -> Rect {
++    if !pane_gaps {
++        return area;
+     }
++
++    let left = pane_spacing.padding_horizontal.min(area.width);
++    let width = area.width - left;
++    let right = pane_spacing.padding_horizontal.min(width);
++    let top = pane_spacing.padding_vertical.min(area.height);
++    let height = area.height - top;
++    let bottom = pane_spacing.padding_vertical.min(height);
++    Rect::new(
++        area.x.saturating_add(left),
++        area.y.saturating_add(top),
++        width - right,
++        height - bottom,
++    )
+ }
+ 
++/// Apply pane borders and, while `pane_gaps` is enabled, the numeric
++/// inter-pane gaps and tab-edge padding from `pane_spacing`.
++///
++/// The panes tile their area, so an interior edge always borders another pane.
++/// Each pane keeps its own right/bottom edge and shrinks toward its
++/// right/below neighbor, which leaves exactly the configured blank gap between
++/// the two pane areas. Zero gaps use compact shared borders on that axis;
++/// disabled `pane_gaps` also removes tab padding. Every clamp keeps a rect
++/// inside its original area for tiny or oversized settings.
+ pub(crate) fn apply_pane_chrome(
+-    panes: Vec<PaneInfo>,
++    mut panes: Vec<PaneInfo>,
+     pane_borders: crate::config::PaneBordersConfig,
+     pane_gaps: bool,
++    pane_spacing: crate::config::PaneSpacing,
+     pane_outer_borders: bool,
+ ) -> Vec<PaneInfo> {
+     let multi_pane = panes.len() > 1;
+     let bordered = pane_borders.shows_borders(multi_pane);
+-    let outer_left = panes.iter().map(|info| info.rect.x).min().unwrap_or(0);
+-    let outer_top = panes.iter().map(|info| info.rect.y).min().unwrap_or(0);
+-    let outer_right = panes
+-        .iter()
+-        .map(|info| info.rect.x.saturating_add(info.rect.width))
+-        .max()
+-        .unwrap_or(0);
+-    let outer_bottom = panes
+-        .iter()
+-        .map(|info| info.rect.y.saturating_add(info.rect.height))
+-        .max()
+-        .unwrap_or(0);
+-    panes
+-        .iter()
+-        .cloned()
+-        .map(|mut info| {
+-            let right_neighbor = multi_pane.then(|| pane_to_right(&info, &panes)).flatten();
+-            let below_neighbor = multi_pane.then(|| pane_below(&info, &panes)).flatten();
++    let shared_horizontal = !pane_gaps || pane_spacing.gap_horizontal == 0;
++    let shared_vertical = !pane_gaps || pane_spacing.gap_vertical == 0;
++    let mut outer_left = u16::MAX;
++    let mut outer_top = u16::MAX;
++    let mut outer_right = 0;
++    let mut outer_bottom = 0;
++    for info in &panes {
++        outer_left = outer_left.min(info.rect.x);
++        outer_top = outer_top.min(info.rect.y);
++        outer_right = outer_right.max(info.rect.x.saturating_add(info.rect.width));
++        outer_bottom = outer_bottom.max(info.rect.y.saturating_add(info.rect.height));
++    }
+ 
+-            if multi_pane && pane_gaps && !pane_borders.draws_borders() {
+-                if right_neighbor.is_some() {
+-                    info.rect.width = shrink_for_one_cell_gap(info.rect.width);
++    for info in &mut panes {
++        let right = info.rect.x.saturating_add(info.rect.width);
++        let bottom = info.rect.y.saturating_add(info.rect.height);
++        let at_outer_left = info.rect.x <= outer_left;
++        let at_outer_top = info.rect.y <= outer_top;
++        // The panes tile their area, so an interior edge always borders
++        // another pane and only the outer edges take tab padding.
++        let at_outer_right = right >= outer_right;
++        let at_outer_bottom = bottom >= outer_bottom;
++        let has_right_neighbor = right < outer_right;
++        let has_below_neighbor = bottom < outer_bottom;
++
++        if pane_gaps {
++            let padding_horizontal = pane_spacing.padding_horizontal;
++            let padding_vertical = pane_spacing.padding_vertical;
++            // Tab-edge padding first: a blank margin inside the pane area on
++            // every outer edge.
++            if at_outer_left {
++                let inset = padding_horizontal.min(info.rect.width);
++                info.rect.x = info.rect.x.saturating_add(inset);
++                info.rect.width -= inset;
++            }
++            if at_outer_top {
++                let inset = padding_vertical.min(info.rect.height);
++                info.rect.y = info.rect.y.saturating_add(inset);
++                info.rect.height -= inset;
++            }
++            if at_outer_right {
++                info.rect.width = info.rect.width.saturating_sub(padding_horizontal);
++            }
++            if at_outer_bottom {
++                info.rect.height = info.rect.height.saturating_sub(padding_vertical);
++            }
++            // Then the gaps this pane owns toward a right or below neighbor.
++            if has_right_neighbor {
++                info.rect.width = info.rect.width.saturating_sub(pane_spacing.gap_horizontal);
++            }
++            if has_below_neighbor {
++                info.rect.height = info.rect.height.saturating_sub(pane_spacing.gap_vertical);
++            }
++        }
++
++        info.borders = if !bordered {
++            Borders::NONE
++        } else {
++            let mut borders = Borders::ALL;
++            if shared_horizontal && has_right_neighbor {
++                borders.remove(Borders::RIGHT);
++            }
++            if shared_vertical && has_below_neighbor {
++                borders.remove(Borders::BOTTOM);
++            }
++            if !pane_outer_borders {
++                if at_outer_left {
++                    borders.remove(Borders::LEFT);
+                 }
+-                if below_neighbor.is_some() {
+-                    info.rect.height = shrink_for_one_cell_gap(info.rect.height);
++                if at_outer_top {
++                    borders.remove(Borders::TOP);
++                }
++                if at_outer_right {
++                    borders.remove(Borders::RIGHT);
++                }
++                if at_outer_bottom {
++                    borders.remove(Borders::BOTTOM);
+                 }
+             }
++            borders
++        };
++    }
+ 
+-            info.borders = if !bordered {
+-                Borders::NONE
+-            } else {
+-                let mut borders = Borders::ALL;
+-                if !pane_gaps {
+-                    if right_neighbor.is_some() {
+-                        borders.remove(Borders::RIGHT);
+-                    }
+-                    if below_neighbor.is_some() {
+-                        borders.remove(Borders::BOTTOM);
+-                    }
+-                }
+-                if !pane_outer_borders {
+-                    if info.rect.x == outer_left {
+-                        borders.remove(Borders::LEFT);
+-                    }
+-                    if info.rect.y == outer_top {
+-                        borders.remove(Borders::TOP);
+-                    }
+-                    if info.rect.x.saturating_add(info.rect.width) == outer_right {
+-                        borders.remove(Borders::RIGHT);
+-                    }
+-                    if info.rect.y.saturating_add(info.rect.height) == outer_bottom {
+-                        borders.remove(Borders::BOTTOM);
+-                    }
+-                }
+-                borders
+-            };
+-            info
+-        })
+-        .collect()
++    panes
+ }
+ 
+ fn runtime_for_tab_pane<'a>(
+@@ -220,12 +242,13 @@ pub(super) fn resize_tab_panes(
+         if let Some((terminal_id, rt)) =
+             runtime_for_tab_pane(app, terminal_runtimes, workspace_index, tab, focused_id)
+         {
++            let pane_rect = tab_pane_area(area, app.pane_gaps, app.pane_spacing);
+             let borders = if app.pane_borders.shows_borders(multi_pane) && app.pane_outer_borders {
+                 Borders::ALL
+             } else {
+                 Borders::NONE
+             };
+-            let pane_inner = pane_inner_rect(area, borders);
++            let pane_inner = pane_inner_rect(pane_rect, borders);
+             let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
+             if !app.direct_attach_resize_locks.contains(terminal_id) {
+                 rt.resize(
+@@ -243,6 +266,7 @@ pub(super) fn resize_tab_panes(
+         tab.layout.panes(area),
+         app.pane_borders,
+         app.pane_gaps,
++        app.pane_spacing,
+         app.pane_outer_borders,
+     ) {
+         let pane_inner = pane_inner_rect(info.rect, info.borders);
+@@ -285,12 +309,13 @@ pub(super) fn compute_pane_infos_for_tab(
+ 
+     if tab.zoomed {
+         let focused_id = tab.layout.focused();
++        let pane_rect = tab_pane_area(area, app.pane_gaps, app.pane_spacing);
+         let borders = if app.pane_borders.shows_borders(multi_pane) && app.pane_outer_borders {
+             Borders::ALL
+         } else {
+             Borders::NONE
+         };
+-        let pane_inner = pane_inner_rect(area, borders);
++        let pane_inner = pane_inner_rect(pane_rect, borders);
+         let mut inner_rect = pane_inner;
+         let mut scrollbar_rect = None;
+         if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, focused_id) {
+@@ -311,7 +336,7 @@ pub(super) fn compute_pane_infos_for_tab(
+         }
+         return vec![PaneInfo {
+             id: focused_id,
+-            rect: area,
++            rect: pane_rect,
+             inner_rect,
+             scrollbar_rect,
+             borders,
+@@ -323,6 +348,7 @@ pub(super) fn compute_pane_infos_for_tab(
+         tab.layout.panes(area),
+         app.pane_borders,
+         app.pane_gaps,
++        app.pane_spacing,
+         app.pane_outer_borders,
+     );
+ 
+@@ -478,7 +504,14 @@ fn render_pane_borders(
+     for info in pane_infos {
+         add_pane_border_cells(&mut cells, info);
+     }
+-    add_split_border_cells(app.pane_gaps, split_borders, &mut cells);
++    let shared_horizontal = !app.pane_gaps || app.pane_spacing.gap_horizontal == 0;
++    let shared_vertical = !app.pane_gaps || app.pane_spacing.gap_vertical == 0;
++    add_split_border_cells(
++        shared_horizontal,
++        shared_vertical,
++        split_borders,
++        &mut cells,
++    );
+ 
+     let buf = frame.buffer_mut();
+     let area = buf.area;
+@@ -490,9 +523,9 @@ fn render_pane_borders(
+         {
+             continue;
+         }
+-        let focused = pane_infos
+-            .iter()
+-            .any(|info| info.is_focused && line_touches_pane(x, y, info, app.pane_gaps));
++        let focused = pane_infos.iter().any(|info| {
++            info.is_focused && line_touches_pane(x, y, info, shared_horizontal, shared_vertical)
++        });
+         let symbol = line_cell_symbol(line);
+         if symbol.is_empty() {
+             continue;
+@@ -511,17 +544,18 @@ fn render_pane_borders(
+ }
+ 
+ fn add_split_border_cells(
+-    pane_gaps: bool,
++    shared_horizontal: bool,
++    shared_vertical: bool,
+     split_borders: &[crate::layout::SplitBorder],
+     cells: &mut std::collections::HashMap<(u16, u16), LineCell>,
+ ) {
+-    if pane_gaps {
++    if !shared_horizontal && !shared_vertical {
+         return;
+     }
+ 
+     for split in split_borders {
+         match split.direction {
+-            ratatui::layout::Direction::Horizontal => {
++            ratatui::layout::Direction::Horizontal if shared_horizontal => {
+                 let x = split.pos;
+                 let end = split.area.y.saturating_add(split.area.height);
+                 for y in split.area.y..=end {
+@@ -535,14 +569,21 @@ fn add_split_border_cells(
+                     let right = cells
+                         .get(&(x.saturating_add(1), y))
+                         .is_some_and(|cell| cell.left || cell.right);
++                    let up = y
++                        .checked_sub(1)
++                        .and_then(|above_y| cells.get(&(x, above_y)))
++                        .is_some_and(|cell| cell.up || cell.down);
++                    let down = cells
++                        .get(&(x, y.saturating_add(1)))
++                        .is_some_and(|cell| cell.up || cell.down);
+                     let cell = cells.entry((x, y)).or_default();
+-                    cell.up |= y > split.area.y;
+-                    cell.down |= y + 1 < end;
++                    cell.up |= up;
++                    cell.down |= down;
+                     cell.left |= left;
+                     cell.right |= right;
+                 }
+             }
+-            ratatui::layout::Direction::Vertical => {
++            ratatui::layout::Direction::Vertical if shared_vertical => {
+                 let y = split.pos;
+                 let end = split.area.x.saturating_add(split.area.width);
+                 for x in split.area.x..=end {
+@@ -556,13 +597,21 @@ fn add_split_border_cells(
+                     let down = cells
+                         .get(&(x, y.saturating_add(1)))
+                         .is_some_and(|cell| cell.up || cell.down);
++                    let left = x
++                        .checked_sub(1)
++                        .and_then(|left_x| cells.get(&(left_x, y)))
++                        .is_some_and(|cell| cell.left || cell.right);
++                    let right = cells
++                        .get(&(x.saturating_add(1), y))
++                        .is_some_and(|cell| cell.left || cell.right);
+                     let cell = cells.entry((x, y)).or_default();
+-                    cell.left |= x > split.area.x;
+-                    cell.right |= x + 1 < end;
++                    cell.left |= left;
++                    cell.right |= right;
+                     cell.up |= up;
+                     cell.down |= down;
+                 }
+             }
++            _ => {}
+         }
+     }
+ }
+@@ -608,7 +657,13 @@ fn add_pane_border_cells(
+     }
+ }
+ 
+-fn line_touches_pane(x: u16, y: u16, info: &PaneInfo, pane_gaps: bool) -> bool {
++fn line_touches_pane(
++    x: u16,
++    y: u16,
++    info: &PaneInfo,
++    shared_horizontal: bool,
++    shared_vertical: bool,
++) -> bool {
+     let rect = info.rect;
+     if rect.width == 0 || rect.height == 0 {
+         return false;
+@@ -620,16 +675,12 @@ fn line_touches_pane(x: u16, y: u16, info: &PaneInfo, pane_gaps: bool) -> bool {
+     let own_border =
+         (in_rows && (x == rect.x || x == right)) || (in_cols && (y == rect.y || y == bottom));
+ 
+-    if pane_gaps {
+-        return own_border;
+-    }
+-
+     let shared_right = rect.x.saturating_add(rect.width);
+     let shared_bottom = rect.y.saturating_add(rect.height);
+     own_border
+-        || (in_rows && x == shared_right)
+-        || (in_cols && y == shared_bottom)
+-        || (x == shared_right && y == shared_bottom)
++        || (shared_horizontal && in_rows && x == shared_right)
++        || (shared_vertical && in_cols && y == shared_bottom)
++        || (shared_horizontal && shared_vertical && x == shared_right && y == shared_bottom)
+ }
+ 
+ fn render_pane_border_titles(
+@@ -859,6 +910,17 @@ mod tests {
+         render_pane_borders(app, ws, &app.view.pane_infos, split_borders, frame);
+     }
+ 
++    /// Distinct values for every field so a mix-up between the four settings
++    /// shows up in geometry assertions.
++    fn test_spacing() -> crate::config::PaneSpacing {
++        crate::config::PaneSpacing {
++            gap_horizontal: 3,
++            gap_vertical: 5,
++            padding_horizontal: 2,
++            padding_vertical: 1,
++        }
++    }
++
+     #[test]
+     fn unavailable_pane_renders_restore_failure_without_a_runtime() {
+         let mut app = AppState::test_new();
+@@ -962,6 +1024,7 @@ mod tests {
+             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
+             PaneBordersConfig::Auto,
+             false,
++            test_spacing(),
+             true,
+         );
+         let left = infos.iter().find(|info| info.id == root).unwrap();
+@@ -983,6 +1046,7 @@ mod tests {
+             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
+             PaneBordersConfig::Auto,
+             false,
++            test_spacing(),
+             true,
+         );
+         let top = infos.iter().find(|info| info.id == root).unwrap();
+@@ -1004,6 +1068,7 @@ mod tests {
+             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
+             PaneBordersConfig::Auto,
+             false,
++            test_spacing(),
+             false,
+         );
+         let left = infos.iter().find(|info| info.id == root).unwrap();
+@@ -1014,48 +1079,324 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn pane_gaps_keep_independent_bordered_panes() {
++    fn pane_gaps_border_the_gap_with_independent_panes_and_padding() {
+         let mut workspace = Workspace::test_new("test");
+         let root = workspace.tabs[0].root_pane;
+         let right = workspace.test_split(ratatui::layout::Direction::Horizontal);
+         workspace.tabs[0].layout.focus_pane(root);
++        let spacing = test_spacing();
+ 
+         let infos = apply_pane_chrome(
+             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
+             PaneBordersConfig::Auto,
+             true,
++            spacing,
+             true,
+         );
+         let left = infos.iter().find(|info| info.id == root).unwrap();
+         let right = infos.iter().find(|info| info.id == right).unwrap();
+ 
+-        assert_eq!(left.rect.x + left.rect.width, right.rect.x);
++        assert_eq!(left.rect, Rect::new(2, 1, 45, 18));
++        assert_eq!(right.rect, Rect::new(50, 1, 48, 18));
++        let gap = right.rect.x - (left.rect.x + left.rect.width);
++        assert_eq!(gap, spacing.gap_horizontal);
+         assert_eq!(left.borders, Borders::ALL);
+         assert_eq!(right.borders, Borders::ALL);
+     }
+ 
+     #[test]
+-    fn borderless_pane_gaps_add_one_empty_cell_between_panes() {
++    fn borderless_pane_gaps_use_the_numeric_gap_between_panes() {
+         let mut workspace = Workspace::test_new("test");
+         let root = workspace.tabs[0].root_pane;
+         let right = workspace.test_split(ratatui::layout::Direction::Horizontal);
+         workspace.tabs[0].layout.focus_pane(root);
++        let spacing = test_spacing();
+ 
+         let infos = apply_pane_chrome(
+             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
+             PaneBordersConfig::Off,
+             true,
++            spacing,
+             true,
+         );
+         let left = infos.iter().find(|info| info.id == root).unwrap();
+         let right = infos.iter().find(|info| info.id == right).unwrap();
+ 
+-        assert_eq!(left.rect, Rect::new(0, 0, 49, 20));
+-        assert_eq!(right.rect, Rect::new(50, 0, 50, 20));
++        assert_eq!(left.rect, Rect::new(2, 1, 45, 18));
++        assert_eq!(right.rect, Rect::new(50, 1, 48, 18));
++        let gap = right.rect.x - (left.rect.x + left.rect.width);
++        assert_eq!(gap, spacing.gap_horizontal);
+         assert!(left.borders.is_empty());
+         assert!(right.borders.is_empty());
+     }
+ 
++    #[test]
++    fn stacked_pane_gaps_use_the_vertical_size() {
++        let mut workspace = Workspace::test_new("test");
++        let root = workspace.tabs[0].root_pane;
++        let bottom = workspace.test_split(ratatui::layout::Direction::Vertical);
++        workspace.tabs[0].layout.focus_pane(root);
++        let spacing = test_spacing();
++
++        let infos = apply_pane_chrome(
++            workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
++            PaneBordersConfig::Auto,
++            true,
++            spacing,
++            true,
++        );
++        let top = infos.iter().find(|info| info.id == root).unwrap();
++        let bottom = infos.iter().find(|info| info.id == bottom).unwrap();
++
++        assert_eq!(top.rect, Rect::new(2, 1, 96, 4));
++        assert_eq!(bottom.rect, Rect::new(2, 10, 96, 9));
++        let gap = bottom.rect.y - (top.rect.y + top.rect.height);
++        assert_eq!(gap, spacing.gap_vertical);
++    }
++
++    #[test]
++    fn nested_split_gaps_align_across_pane_bands() {
++        let mut workspace = Workspace::test_new("test");
++        let root = workspace.tabs[0].root_pane;
++        let right = workspace.test_split(ratatui::layout::Direction::Horizontal);
++        workspace.tabs[0].layout.focus_pane(root);
++        let bottom_left = workspace.test_split(ratatui::layout::Direction::Vertical);
++        let spacing = test_spacing();
++
++        let infos = apply_pane_chrome(
++            workspace.tabs[0].layout.panes(Rect::new(0, 0, 40, 20)),
++            PaneBordersConfig::Auto,
++            true,
++            spacing,
++            true,
++        );
++        let top_left = infos.iter().find(|info| info.id == root).unwrap();
++        let bottom_left = infos.iter().find(|info| info.id == bottom_left).unwrap();
++        let right = infos.iter().find(|info| info.id == right).unwrap();
++
++        assert_eq!(top_left.rect, Rect::new(2, 1, 15, 4));
++        assert_eq!(bottom_left.rect, Rect::new(2, 10, 15, 9));
++        assert_eq!(right.rect, Rect::new(20, 1, 18, 18));
++        // Both left-hand bands keep the same blank columns before the right pane.
++        let top_gap = right.rect.x - (top_left.rect.x + top_left.rect.width);
++        let bottom_gap = right.rect.x - (bottom_left.rect.x + bottom_left.rect.width);
++        assert_eq!(top_gap, spacing.gap_horizontal);
++        assert_eq!(bottom_gap, spacing.gap_horizontal);
++        let vertical_gap = bottom_left.rect.y - (top_left.rect.y + top_left.rect.height);
++        assert_eq!(vertical_gap, spacing.gap_vertical);
++    }
++
++    #[test]
++    fn disabled_pane_gaps_ignore_the_numeric_sizes() {
++        let mut workspace = Workspace::test_new("test");
++        let root = workspace.tabs[0].root_pane;
++        let right = workspace.test_split(ratatui::layout::Direction::Horizontal);
++        workspace.tabs[0].layout.focus_pane(root);
++        let oversized = crate::config::PaneSpacing {
++            gap_horizontal: 9,
++            gap_vertical: 9,
++            padding_horizontal: 7,
++            padding_vertical: 7,
++        };
++
++        let infos = apply_pane_chrome(
++            workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
++            PaneBordersConfig::Auto,
++            false,
++            oversized,
++            true,
++        );
++        let left = infos.iter().find(|info| info.id == root).unwrap();
++        let right = infos.iter().find(|info| info.id == right).unwrap();
++
++        assert_eq!(left.rect, Rect::new(0, 0, 50, 20));
++        assert_eq!(right.rect, Rect::new(50, 0, 50, 20));
++        assert!(!left.borders.contains(Borders::RIGHT));
++        assert!(right.borders.contains(Borders::LEFT));
++    }
++
++    #[test]
++    fn zero_pane_spacing_matches_compact_geometry_and_rendering() {
++        let mut workspace = Workspace::test_new("test");
++        let root = workspace.tabs[0].root_pane;
++        let right = workspace.test_split(ratatui::layout::Direction::Horizontal);
++        workspace.tabs[0].layout.focus_pane(root);
++        let below = workspace.test_split(ratatui::layout::Direction::Vertical);
++        let area = Rect::new(3, 2, 40, 16);
++        let flush = crate::config::PaneSpacing {
++            gap_horizontal: 0,
++            gap_vertical: 0,
++            padding_horizontal: 0,
++            padding_vertical: 0,
++        };
++        let mut app = AppState::test_new();
++        app.view.terminal_area = area;
++        app.pane_spacing = flush;
++        let mut terminal =
++            ratatui::Terminal::new(ratatui::backend::TestBackend::new(50, 24)).unwrap();
++
++        for borders in [PaneBordersConfig::Auto, PaneBordersConfig::Off] {
++            app.pane_borders = borders;
++            for outer in [true, false] {
++                app.pane_outer_borders = outer;
++                for focus in [root, right, below] {
++                    workspace.tabs[0].layout.focus_pane(focus);
++                    let splits = workspace.tabs[0].layout.splits(area);
++                    app.pane_gaps = true;
++                    app.view.pane_infos = apply_pane_chrome(
++                        workspace.tabs[0].layout.panes(area),
++                        borders,
++                        true,
++                        flush,
++                        outer,
++                    );
++                    let zero_geometry: Vec<_> = app
++                        .view
++                        .pane_infos
++                        .iter()
++                        .map(|info| (info.rect, info.borders))
++                        .collect();
++                    terminal
++                        .draw(|frame| render_view_pane_borders(&app, &workspace, &splits, frame))
++                        .unwrap();
++                    let zero_buffer = terminal.backend().buffer().clone();
++                    app.pane_gaps = false;
++                    app.view.pane_infos = apply_pane_chrome(
++                        workspace.tabs[0].layout.panes(area),
++                        borders,
++                        false,
++                        flush,
++                        outer,
++                    );
++                    let compact_geometry: Vec<_> = app
++                        .view
++                        .pane_infos
++                        .iter()
++                        .map(|info| (info.rect, info.borders))
++                        .collect();
++                    terminal
++                        .draw(|frame| render_view_pane_borders(&app, &workspace, &splits, frame))
++                        .unwrap();
++                    assert_eq!(zero_geometry, compact_geometry);
++                    assert_eq!(&zero_buffer, terminal.backend().buffer());
++                }
++            }
++        }
++    }
++
++    #[test]
++    fn zero_gap_axes_keep_padding_other_gaps_and_shared_focus() {
++        let mut workspace = Workspace::test_new("test");
++        let root = workspace.tabs[0].root_pane;
++        let right = workspace.test_split(ratatui::layout::Direction::Horizontal);
++        workspace.tabs[0].layout.focus_pane(root);
++        let below = workspace.test_split(ratatui::layout::Direction::Vertical);
++        workspace.tabs[0].layout.focus_pane(root);
++        let area = Rect::new(0, 0, 100, 20);
++        let splits = workspace.tabs[0].layout.splits(area);
++        let mut app = AppState::test_new();
++        app.pane_borders = PaneBordersConfig::Auto;
++        app.pane_gaps = true;
++        app.view.terminal_area = area;
++        let mut terminal =
++            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20)).unwrap();
++
++        for horizontal in [true, false] {
++            app.pane_spacing = crate::config::PaneSpacing {
++                gap_horizontal: if horizontal { 0 } else { 3 },
++                gap_vertical: if horizontal { 5 } else { 0 },
++                padding_horizontal: 2,
++                padding_vertical: 1,
++            };
++            app.view.pane_infos = apply_pane_chrome(
++                workspace.tabs[0].layout.panes(area),
++                app.pane_borders,
++                true,
++                app.pane_spacing,
++                true,
++            );
++            let top_left = app
++                .view
++                .pane_infos
++                .iter()
++                .find(|info| info.id == root)
++                .unwrap();
++            let bottom_left = app
++                .view
++                .pane_infos
++                .iter()
++                .find(|info| info.id == below)
++                .unwrap();
++            let right_pane = app
++                .view
++                .pane_infos
++                .iter()
++                .find(|info| info.id == right)
++                .unwrap();
++            assert_eq!(
++                right_pane.rect.x - top_left.rect.right(),
++                app.pane_spacing.gap_horizontal
++            );
++            assert_eq!(
++                bottom_left.rect.y - top_left.rect.bottom(),
++                app.pane_spacing.gap_vertical
++            );
++            assert_eq!(top_left.rect.x, 2);
++            assert_eq!(top_left.rect.y, 1);
++            assert_eq!(area.right() - right_pane.rect.right(), 2);
++            assert_eq!(area.bottom() - bottom_left.rect.bottom(), 1);
++            assert_eq!(top_left.borders.contains(Borders::RIGHT), !horizontal);
++            assert_eq!(top_left.borders.contains(Borders::BOTTOM), horizontal);
++            terminal
++                .draw(|frame| render_view_pane_borders(&app, &workspace, &splits, frame))
++                .unwrap();
++            let buffer = terminal.backend().buffer();
++            for x in 0..100 {
++                assert_eq!(buffer[(x, 0)].symbol(), " ");
++                assert_eq!(buffer[(x, 19)].symbol(), " ");
++            }
++            if horizontal {
++                assert_eq!(buffer[(50, 1)].symbol(), "┬");
++                assert_eq!(buffer[(50, 2)].fg, app.palette.accent);
++            } else {
++                assert_eq!(buffer[(3, 10)].fg, app.palette.accent);
++            }
++        }
++    }
++
++    #[test]
++    fn oversized_pane_spacing_clamps_inside_the_original_area() {
++        let mut workspace = Workspace::test_new("test");
++        workspace.test_split(ratatui::layout::Direction::Horizontal);
++        let area = Rect::new(0, 0, 7, 4);
++        let oversized = crate::config::PaneSpacing {
++            gap_horizontal: u16::MAX,
++            gap_vertical: u16::MAX,
++            padding_horizontal: u16::MAX,
++            padding_vertical: u16::MAX,
++        };
++
++        let infos = apply_pane_chrome(
++            workspace.tabs[0].layout.panes(area),
++            PaneBordersConfig::Auto,
++            true,
++            oversized,
++            true,
++        );
++
++        assert_eq!(infos.len(), 2);
++        for info in &infos {
++            let pane_right = u32::from(info.rect.x) + u32::from(info.rect.width);
++            let pane_bottom = u32::from(info.rect.y) + u32::from(info.rect.height);
++            let area_right = u32::from(area.x) + u32::from(area.width);
++            let area_bottom = u32::from(area.y) + u32::from(area.height);
++            assert!(info.rect.x >= area.x);
++            assert!(info.rect.y >= area.y);
++            assert!(pane_right <= area_right);
++            assert!(pane_bottom <= area_bottom);
++        }
++    }
++
+     #[test]
+     fn disabled_pane_borders_make_inner_rect_equal_visual_rect() {
+         let mut workspace = Workspace::test_new("test");
+@@ -1065,6 +1406,7 @@ mod tests {
+             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
+             PaneBordersConfig::Off,
+             false,
++            test_spacing(),
+             true,
+         );
+ 
+@@ -1083,6 +1425,7 @@ mod tests {
+             workspace.tabs[0].layout.panes(area),
+             PaneBordersConfig::Auto,
+             false,
++            test_spacing(),
+             true,
+         );
+         assert_eq!(default_infos[0].borders, Borders::NONE);
+@@ -1091,6 +1434,7 @@ mod tests {
+             workspace.tabs[0].layout.panes(area),
+             PaneBordersConfig::Always,
+             false,
++            test_spacing(),
+             true,
+         );
+         assert_eq!(framed_infos[0].borders, Borders::ALL);
+@@ -1099,11 +1443,44 @@ mod tests {
+             workspace.tabs[0].layout.panes(area),
+             PaneBordersConfig::Always,
+             false,
++            test_spacing(),
+             false,
+         );
+         assert_eq!(no_outer_infos[0].borders, Borders::NONE);
+     }
+ 
++    #[test]
++    fn zoomed_tab_pane_keeps_tab_padding() {
++        let mut app = AppState::test_new();
++        let mut workspace = Workspace::test_new("test");
++        let root = workspace.tabs[0].root_pane;
++        workspace.test_split(ratatui::layout::Direction::Horizontal);
++        workspace.tabs[0].layout.focus_pane(root);
++        workspace.tabs[0].zoomed = true;
++        app.workspaces = vec![workspace];
++        app.active = Some(0);
++        app.pane_gaps = true;
++        app.pane_spacing = test_spacing();
++        app.pane_borders = PaneBordersConfig::Always;
++        app.pane_outer_borders = true;
++
++        let infos = compute_pane_infos_for_tab(
++            &app,
++            &TerminalRuntimeRegistry::new(),
++            0,
++            0,
++            Rect::new(0, 0, 40, 12),
++            false,
++            crate::kitty_graphics::HostCellSize::default(),
++        );
++
++        assert_eq!(infos.len(), 1);
++        assert_eq!(infos[0].id, root);
++        assert_eq!(infos[0].rect, Rect::new(2, 1, 36, 10));
++        assert_eq!(infos[0].borders, Borders::ALL);
++        assert_eq!(infos[0].inner_rect, Rect::new(3, 2, 34, 8));
++    }
++
+     #[test]
+     fn global_pane_border_renderer_composes_junctions_and_focus_style() {
+         let mut app = AppState::test_new();
+diff --git i/tests/detach_reattach.rs w/tests/detach_reattach.rs
+index 0bbe94b..9f14cf7 100644
+--- i/tests/detach_reattach.rs
++++ w/tests/detach_reattach.rs
+@@ -605,7 +605,8 @@ fn pane_created_without_client_uses_configured_headless_size() {
+         Duration::from_secs(5),
+     );
+ 
+-    assert_eq!(size, (41, 132));
++    // Default one-cell tab padding removes one cell at each edge.
++    assert_eq!(size, (39, 130));
+ 
+     cleanup_spawned_herdr(spawned, base);
+ }
+@@ -648,7 +649,7 @@ fn pane_created_after_detach_uses_configured_headless_size() {
+         "ATTACHED_SIZE",
+         Duration::from_secs(5),
+     );
+-    assert_eq!(attached_size, (50, 160));
++    assert_eq!(attached_size, (48, 158));
+ 
+     send_detach(&mut stream).expect("send detach");
+     assert!(
+@@ -675,7 +676,7 @@ fn pane_created_after_detach_uses_configured_headless_size() {
+         Duration::from_secs(5),
+     );
+ 
+-    assert_eq!(headless_size, (41, 132));
++    assert_eq!(headless_size, (39, 130));
+     assert_eq!(preserved_size, attached_size);
+ 
+     cleanup_spawned_herdr(spawned, base);

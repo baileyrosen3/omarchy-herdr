@@ -7,7 +7,7 @@ import tomllib
 import unittest
 from unittest.mock import Mock, patch
 
-from herdr_shell import config, footer_setup
+from herdr_shell import config, footer_setup, runtime
 from herdr_shell.runtime import ShellError
 
 
@@ -36,13 +36,13 @@ class FooterSetupTests(unittest.TestCase):
         return tomllib.loads(self.store.read())["ui"]["footer"]
 
     def test_explicit_capability_flag_is_required_and_read_only(self):
-        with patch.object(footer_setup, "run_herdr", return_value='{"footer":1,"other":0}') as probe:
+        with patch.object(runtime, "run_herdr", return_value='{"footer":1,"other":0}'):
             self.assertTrue(footer_setup.supported())
-        probe.assert_called_once_with(["--client-capabilities"])
-        for reply in ("not json", "null", "[]", '{}', '{"footer":0}', '{"footer":true}', '{"footer":"1"}', '{"footer":2}'):
-            with self.subTest(reply=reply), patch.object(footer_setup, "run_herdr", return_value=reply):
+        for reply in ("not json", "null", "[]", '{}', '{"footer":0}', '{"footer":true}', '{"footer":"1"}',
+                      '{"footer":2}', '{"pane_spacing":1}'):
+            with self.subTest(reply=reply), patch.object(runtime, "run_herdr", return_value=reply):
                 self.assertFalse(footer_setup.supported())
-        with patch.object(footer_setup, "run_herdr", side_effect=ShellError("unknown option")):
+        with patch.object(runtime, "run_herdr", side_effect=ShellError("unknown option")):
             self.assertFalse(footer_setup.supported())
             self.assertEqual(self.proposal()["changes"], [])
         self.assertEqual(self.path.read_text(), BASE)

@@ -10,7 +10,7 @@ import tomllib
 import unittest
 from unittest.mock import Mock, patch
 
-from herdr_shell import PLUGIN_ID, config, lifecycle, footer_setup
+from herdr_shell import PLUGIN_ID, config, lifecycle, footer_setup, namer
 from herdr_shell.runtime import ShellError
 
 
@@ -108,6 +108,7 @@ class LifecycleTests(unittest.TestCase):
                         patch.object(lifecycle.Path, "home", return_value=self.home),
                         patch.object(lifecycle, "desktop", self.desktop),
                         patch.object(lifecycle, "Client", self.factory),
+                        patch.object(namer, "stop", return_value={"stopped": []}),
                         patch.object(config, "defaults", return_value={"prefix": "ctrl+space", "focus_pane_left": "ctrl+alt+left"})):
             patcher.start()
             self.addCleanup(patcher.stop)

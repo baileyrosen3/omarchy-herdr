@@ -148,3 +148,26 @@ def run_herdr(argv, *, env=None):
     if result.returncode:
         raise ShellError((result.stderr or result.stdout).strip() or f"Herdr exited {result.returncode}.")
     return result.stdout
+
+
+def capabilities():
+    """Read-only native capability advertisement, or {} when unsupported.
+
+    Stock Herdr rejects this flag, and unknown configuration fields can be
+    silently ignored, so a successful config check is not a capability probe.
+    """
+    try:
+        reply = json.loads(run_herdr(["--client-capabilities"]))
+    except (ShellError, OSError, ValueError, TypeError):
+        return {}
+    return reply if isinstance(reply, dict) else {}
+
+
+def capability(name):
+    """Advertised integer version for one native field family, or None.
+
+    Only an explicit integer version counts; booleans, strings, and other
+    shapes never opt a field family in.
+    """
+    version = capabilities().get(name)
+    return version if type(version) is int else None
