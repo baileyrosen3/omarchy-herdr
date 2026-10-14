@@ -50,11 +50,11 @@ class TmuxSession:
         self("send-keys", "-t", self.target, "-l", value)
 
     def wait_focus(self, title, label="attached client pane focus", *, popup_absent=None,
-                   focused=True, timeout=8):
+                   timeout=8):
         # RPC replies and server snapshots precede client keyboard routing.
-        # Herdr renders the focused pane's title in bold in the attached client.
+        # Only the destination's bold rendered title acknowledges its focus.
         def ready():
-            return ((f"\x1b[1m {title} " in self.styled_screen()) == focused and
+            return (f"\x1b[1m {title} \x1b[0m" in self.styled_screen() and
                     (popup_absent is None or popup_absent not in self.screen()))
         return eventually(ready, label, timeout=timeout)
 

@@ -93,10 +93,14 @@ it; do not point it at a working session. Generated captures and results are
 local artifacts and are excluded from version control.
 
 The live, trainer, and action probes share `tests/probe_support.py`. Send terminal
-keys only after its focus helper confirms the attached client's rendered pane
-title (and popup absence when needed); RPC replies and server focus snapshots
-alone do not acknowledge the keyboard-input target. Their JSON results record
-the resolved Herdr executable path and explicit native pane-spacing capability.
+keys only after its focus helper positively confirms the exact destination's
+bold rendered pane title (and popup absence when needed); the old pane losing
+focus, RPC replies, and server focus snapshots alone do not acknowledge the
+keyboard-input target. The trainer assigns short, unique `Probe <pane_id>` labels
+to disposable non-guide targets whose borders would otherwise be untitled.
+Its isolated config keeps pane borders visible even in single-pane tabs.
+Their JSON results record the resolved Herdr executable path and explicit native
+pane-spacing capability.
 
 The trainer probe exercises the read-only walkthrough, ordered Hands-on, and
 shuffled Speed Run in a temporary plugin copy and real Herdr/curses session.
